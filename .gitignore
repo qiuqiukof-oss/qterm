@@ -41,3 +41,6 @@ nul
 # ===== Generated caches / machine-specific registries (not source) =====
 .cli-discovery-cache.json
 cli-registry.json
+
+# ===== Cloudflare Pages deploy artifact (deployed separately, not part of the repo) =====
+landing/
