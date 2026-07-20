@@ -267,7 +267,7 @@ function startServer() {
       console.warn('[listen] ' + host + ':' + PORT + ' bind failed: ' + err.message);
     });
     srv.listen(PORT, host, () => {
-      console.log('Q-CLI hub (v1.1.0) listening on ' + host + ':' + PORT);
+      console.log('Hesi（合思） listening on ' + host + ':' + PORT);
       console.log('  -> http://' + host + ':' + PORT);
       console.log('  -> WebSocket: ws://' + host + ':' + PORT);
       if (isPublicBind(host)) {
