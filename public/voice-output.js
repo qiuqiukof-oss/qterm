@@ -1,0 +1,579 @@
+// @ts-check
+// ============================================================
+// Voice Output — SpeechSynthesis (TTS)
+//
+// Provides text-to-speech for AI responses, terminal notifications,
+// and other UI events. Integrates with the chat panel for
+// auto-reading AI replies.
+// ============================================================
+'use strict';
+
+/** @typedef {import('./types').QCLI} QCLI */
+
+import { safeStorage } from './lib/storage.js';
+
+/** @type {QCLI} */
+const Q = /** @type {QCLI} */ (window.QCLI = window.QCLI || {});
+
+// ── State ──
+const _state = {
+  /** @type {SpeechSynthesisUtterance|null} */
+  currentUtterance: null,
+  speaking: false,
+  paused: false,
+  /** @type {Array<{text:string,lang:string}>} */
+  queue: [],
+  enabled: false,         // 是否启用语音输出
+  autoRead: true,         // AI 回复后自动朗读
+  rate: 1.0,              // 语速 0.1~10
+  pitch: 1.0,             // 音高 0~2
+  volume: 1.0,            // 音量 0~1
+  /** @type {string|null} */ // 选中的语音 URI
+  selectedVoice: null,
+  /** @type {string} */
+  language: 'auto',       // auto | zh | en
+};
+
+// ── Keys ──
+const STORAGE_PREFIX = 'qcli-tts-';
+const KEYS = ['enabled', 'autoRead', 'rate', 'pitch', 'volume', 'selectedVoice', 'language'];
+
+// ── Load/Save state ──
+function loadState() {
+  for (const key of KEYS) {
+    const val = safeStorage.get(STORAGE_PREFIX + key);
+    if (val !== null) {
+      if (key === 'enabled' || key === 'autoRead') {
+        _state[key] = val === 'true';
+      } else if (key === 'rate' || key === 'pitch' || key === 'volume') {
+        _state[key] = parseFloat(val);
+      } else {
+        _state[key] = val;
+      }
+    }
+  }
+}
+
+function saveState() {
+  for (const key of KEYS) {
+    safeStorage.set(STORAGE_PREFIX + key, String(_state[key]));
+  }
+}
+
+// ── Voice management ──
+
+/** 获取浏览器可用的语音列表 */
+function getVoices() {
+  return window.speechSynthesis?.getVoices() || [];
+}
+
+/** 获取当前选中的语音 */
+function getSelectedVoice() {
+  const voices = getVoices();
+  if (_state.selectedVoice) {
+    const found = voices.find(v => v.voiceURI === _state.selectedVoice);
+    if (found) return found;
+  }
+  // 自动选择：根据当前语言匹配
+  return autoSelectVoice(voices);
+}
+
+/** 根据语言自动选择语音 */
+function autoSelectVoice(voices, lang) {
+  const targetLang = lang || getTargetLang();
+  // 优先精确匹配
+  const exact = voices.find(v => v.lang.startsWith(targetLang));
+  if (exact) return exact;
+  // 宽泛匹配
+  const broad = voices.find(v => v.lang.startsWith(targetLang.slice(0, 2)));
+  if (broad) return broad;
+  // 默认用第一个
+  return voices[0] || null;
+}
+
+/** 确定朗读目标语言 */
+function getTargetLang() {
+  if (_state.language === 'auto') {
+    // 根据页面语言
+    const pageLang = document.documentElement.lang || navigator.language || 'zh-CN';
+    if (pageLang.startsWith('zh')) return 'zh';
+    return 'en';
+  }
+  return _state.language;
+}
+
+/** 检测文本语言 */
+function detectTextLang(text) {
+  if (!text) return getTargetLang();
+  // 统计中文字符比例
+  const zhCount = (text.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) || []).length;
+  const total = text.length;
+  if (total === 0) return getTargetLang();
+  return (zhCount / total) > 0.15 ? 'zh' : 'en';
+}
+
+// ── Core TTS ──
+
+/**
+ * 朗读文本。
+ * @param {string} text - 要朗读的文本
+ * @param {object} [opts]
+ * @param {string} [opts.lang] - 语言（自动检测）
+ * @param {boolean} [opts.enqueue] - 如果正在朗读，是否排队
+ * @param {Function} [opts.onStart] - 开始回调
+ * @param {Function} [opts.onEnd] - 结束回调
+ * @returns {boolean} 是否成功开始朗读
+ */
+function speak(text, opts = {}) {
+  if (!_state.enabled) return false;
+  if (!text || !text.trim()) return false;
+
+  // 简化文本：去除控制字符和过长的空白
+  const cleanText = text
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  if (!cleanText) return false;
+
+  // 如果正在朗读且不排队，拒绝
+  if (_state.speaking && !opts.enqueue) return false;
+
+  // 如果正在朗读且排队，加入队列
+  if (_state.speaking && opts.enqueue) {
+    _state.queue.push({ text: cleanText, lang: opts.lang || detectTextLang(cleanText) });
+    return true;
+  }
+
+  return _doSpeak(cleanText, opts);
+}
+
+function _doSpeak(text, opts) {
+  const synth = window.speechSynthesis;
+  if (!synth) return false;
+
+  // 取消当前朗读
+  synth.cancel();
+  _state.speaking = false;
+
+  const lang = opts.lang || detectTextLang(text);
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = lang === 'zh' ? 'zh-CN' : 'en-US';
+  utterance.rate = _state.rate;
+  utterance.pitch = _state.pitch;
+  utterance.volume = _state.volume;
+
+  const voice = getSelectedVoice();
+  if (voice) utterance.voice = voice;
+
+  utterance.onstart = () => {
+    _state.speaking = true;
+    _state.currentUtterance = utterance;
+    updateUI();
+    opts.onStart?.();
+  };
+
+  utterance.onend = () => {
+    _state.speaking = false;
+    _state.currentUtterance = null;
+    updateUI();
+    opts.onEnd?.();
+
+    // 播放下一条队列
+    if (_state.queue.length > 0) {
+      const next = _state.queue.shift();
+      _doSpeak(next.text, { lang: next.lang });
+    }
+  };
+
+  utterance.onerror = (e) => {
+    console.warn('[VoiceOutput] Speech error:', e.error);
+    _state.speaking = false;
+    _state.currentUtterance = null;
+    updateUI();
+    // 跳过当前队列
+    if (_state.queue.length > 0) {
+      const next = _state.queue.shift();
+      _doSpeak(next.text, { lang: next.lang });
+    }
+  };
+
+  try {
+    synth.speak(utterance);
+    return true;
+  } catch (e) {
+    console.warn('[VoiceOutput] speak() failed:', e.message);
+    return false;
+  }
+}
+
+/**
+ * 停止朗读
+ */
+function stop() {
+  const synth = window.speechSynthesis;
+  if (synth) {
+    synth.cancel();
+  }
+  _state.speaking = false;
+  _state.currentUtterance = null;
+  _state.queue = [];
+  updateUI();
+}
+
+/**
+ * 暂停/恢复朗读
+ */
+function togglePause() {
+  const synth = window.speechSynthesis;
+  if (!synth) return;
+  if (synth.paused) {
+    synth.resume();
+    _state.paused = false;
+  } else if (_state.speaking) {
+    synth.pause();
+    _state.paused = true;
+  }
+  updateUI();
+}
+
+/**
+ * 朗读 AI 回复（专供 chat-panel 调用）。
+ * 自动检测是否启用、是否 autoRead、是否过长。
+ */
+function speakAIResponse(text) {
+  if (!_state.enabled || !_state.autoRead) return;
+  if (!text || text.length > 3000) {
+    // 过长文本不朗读，只提示
+    if (text && text.length > 3000 && _state.enabled) {
+      speak('AI 回复内容较长，请在聊天面板中阅读', { enqueue: true });
+    }
+    return;
+  }
+  // 移除 Markdown 标记只保留纯文本
+  const plainText = stripMarkdown(text);
+  speak(plainText, { enqueue: true });
+}
+
+/**
+ * 去除 Markdown 标记，提取纯文本供朗读
+ */
+function stripMarkdown(md) {
+  if (!md) return '';
+  return md
+    // 代码块
+    .replace(/```[\s\S]*?```/g, '代码块')
+    // 行内代码
+    .replace(/`([^`]+)`/g, '$1')
+    // 图片
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, (_, alt) => alt || '图片')
+    // 链接
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    // 加粗/斜体
+    .replace(/(\*{1,3}|_{1,3})(.+?)\1/g, '$2')
+    // 标题标记
+    .replace(/^#{1,6}\s+/gm, '')
+    // 列表标记
+    .replace(/^[\s]*[-*+]\s+/gm, '')
+    .replace(/^\s*\d+[.)]\s+/gm, '')
+    // 引用
+    .replace(/^>\s+/gm, '')
+    // 水平线
+    .replace(/^[-*_]{3,}\s*$/gm, '')
+    // 表格
+    .replace(/\|/g, ' ')
+    .replace(/[-:]+\s*[-:|]+\s*/g, '')
+    // HTML 标签
+    .replace(/<[^>]+>/g, '')
+    // 多余空行
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+// ── UI 更新 ──
+function updateUI() {
+  const btn = document.getElementById('tts-toggle-btn');
+  const indicator = document.getElementById('tts-indicator');
+  if (btn) {
+    btn.classList.toggle('speaking', _state.speaking);
+    btn.classList.toggle('tts-enabled', _state.enabled);
+    btn.title = _state.enabled
+      ? (_state.speaking ? '🔊 正在朗读...' : '🔊 语音输出已开启')
+      : '🔇 语音输出已关闭';
+  }
+  if (indicator) {
+    indicator.classList.toggle('hidden', !_state.speaking);
+  }
+}
+
+// ── Settings ──
+
+function getSettings() {
+  return { ..._state };
+}
+
+function updateSettings(changes) {
+  let changed = false;
+  for (const [key, value] of Object.entries(changes)) {
+    if (key in _state && _state[key] !== value) {
+      _state[key] = value;
+      changed = true;
+    }
+  }
+  if (changed) {
+    saveState();
+    updateUI();
+    // 如果关闭语音，停止当前朗读
+    if (changes.enabled === false) stop();
+  }
+}
+
+function setEnabled(val) {
+  updateSettings({ enabled: !!val });
+}
+
+function setAutoRead(val) {
+  updateSettings({ autoRead: !!val });
+}
+
+function setRate(val) {
+  updateSettings({ rate: Math.max(0.1, Math.min(10, parseFloat(val) || 1.0)) });
+}
+
+function setPitch(val) {
+  updateSettings({ pitch: Math.max(0, Math.min(2, parseFloat(val) || 1.0)) });
+}
+
+function setVolume(val) {
+  updateSettings({ volume: Math.max(0, Math.min(1, parseFloat(val) || 1.0)) });
+}
+
+function setLanguage(val) {
+  if (['auto', 'zh', 'en'].includes(val)) {
+    updateSettings({ language: val });
+  }
+}
+
+function setVoice(voiceURI) {
+  updateSettings({ selectedVoice: voiceURI || null });
+}
+
+// ── 弹出语音设置面板 ──
+function toggleSettingsPanel() {
+  let panel = document.getElementById('tts-settings-panel');
+  if (!panel) {
+    panel = createSettingsPanel();
+  }
+  panel.classList.toggle('hidden');
+  if (!panel.classList.contains('hidden')) {
+    renderSettingsPanel(panel);
+  }
+}
+
+function createSettingsPanel() {
+  const panel = document.createElement('div');
+  panel.id = 'tts-settings-panel';
+  panel.className = 'tts-settings-panel hidden';
+  panel.innerHTML = `
+    <div class="tts-settings-header">
+      <span class="tts-settings-icon">🔊</span>
+      <span class="tts-settings-title">语音输出设置</span>
+      <button class="tts-settings-close" id="tts-settings-close">✕</button>
+    </div>
+    <div class="tts-settings-body" id="tts-settings-body">
+      <div class="tts-setting-row">
+        <span class="tts-setting-label">启用语音输出</span>
+        <label class="tts-toggle">
+          <input type="checkbox" id="tts-enabled" ${_state.enabled ? 'checked' : ''}>
+          <span class="tts-toggle-slider"></span>
+        </label>
+      </div>
+      <div class="tts-setting-row">
+        <span class="tts-setting-label">AI 回复自动朗读</span>
+        <label class="tts-toggle">
+          <input type="checkbox" id="tts-auto-read" ${_state.autoRead ? 'checked' : ''}>
+          <span class="tts-toggle-slider"></span>
+        </label>
+      </div>
+      <div class="tts-setting-divider"></div>
+      <div class="tts-setting-row">
+        <span class="tts-setting-label">语速</span>
+        <div class="tts-slider-group">
+          <input type="range" id="tts-rate" min="0.1" max="3" step="0.1" value="${_state.rate}">
+          <span class="tts-value" id="tts-rate-val">${_state.rate.toFixed(1)}x</span>
+        </div>
+      </div>
+      <div class="tts-setting-row">
+        <span class="tts-setting-label">音高</span>
+        <div class="tts-slider-group">
+          <input type="range" id="tts-pitch" min="0" max="2" step="0.1" value="${_state.pitch}">
+          <span class="tts-value" id="tts-pitch-val">${_state.pitch.toFixed(1)}</span>
+        </div>
+      </div>
+      <div class="tts-setting-row">
+        <span class="tts-setting-label">音量</span>
+        <div class="tts-slider-group">
+          <input type="range" id="tts-volume" min="0" max="1" step="0.1" value="${_state.volume}">
+          <span class="tts-value" id="tts-volume-val">${Math.round(_state.volume * 100)}%</span>
+        </div>
+      </div>
+      <div class="tts-setting-divider"></div>
+      <div class="tts-setting-row">
+        <span class="tts-setting-label">朗读语言</span>
+        <select id="tts-language" class="tts-select">
+          <option value="auto" ${_state.language === 'auto' ? 'selected' : ''}>自动检测</option>
+          <option value="zh" ${_state.language === 'zh' ? 'selected' : ''}>中文</option>
+          <option value="en" ${_state.language === 'en' ? 'selected' : ''}>English</option>
+        </select>
+      </div>
+      <div class="tts-setting-row">
+        <span class="tts-setting-label">发音人</span>
+        <select id="tts-voice" class="tts-select"></select>
+      </div>
+      <div class="tts-setting-divider"></div>
+      <button class="tts-test-btn" id="tts-test-btn">🔊 测试语音</button>
+    </div>
+  `;
+  document.body.appendChild(panel);
+
+  // Close button
+  panel.querySelector('#tts-settings-close').addEventListener('click', () => {
+    panel.classList.add('hidden');
+  });
+
+  // Backdrop click
+  panel.addEventListener('click', (e) => {
+    if (e.target === panel) panel.classList.add('hidden');
+  });
+
+  return panel;
+}
+
+function renderSettingsPanel(panel) {
+  // 填充语音列表
+  const voiceSelect = panel.querySelector('#tts-voice');
+  if (voiceSelect) {
+    const voices = getVoices();
+    const currentVal = _state.selectedVoice;
+    voiceSelect.innerHTML = voices.map(v =>
+      `<option value="${v.voiceURI}" ${v.voiceURI === currentVal ? 'selected' : ''}>
+        ${v.name} (${v.lang})
+      </option>`
+    ).join('');
+    // 如果没有选中的语音，选择第一个匹配语言的
+    if (!currentVal && voiceSelect.options.length > 0) {
+      const autoVoice = autoSelectVoice(voices);
+      if (autoVoice) voiceSelect.value = autoVoice.voiceURI;
+    }
+  }
+}
+
+function wireSettingsEvents() {
+  document.addEventListener('change', (e) => {
+    const el = e.target;
+    switch (el.id) {
+      case 'tts-enabled': setEnabled(el.checked); break;
+      case 'tts-auto-read': setAutoRead(el.checked); break;
+      case 'tts-rate': {
+        setRate(el.value);
+        const valEl = document.getElementById('tts-rate-val');
+        if (valEl) valEl.textContent = parseFloat(el.value).toFixed(1) + 'x';
+        break;
+      }
+      case 'tts-pitch': {
+        setPitch(el.value);
+        const valEl = document.getElementById('tts-pitch-val');
+        if (valEl) valEl.textContent = parseFloat(el.value).toFixed(1);
+        break;
+      }
+      case 'tts-volume': {
+        setVolume(el.value);
+        const valEl = document.getElementById('tts-volume-val');
+        if (valEl) valEl.textContent = Math.round(parseFloat(el.value) * 100) + '%';
+        break;
+      }
+      case 'tts-language': setLanguage(el.value); break;
+      case 'tts-voice': setVoice(el.value); break;
+    }
+  });
+
+  document.addEventListener('input', (e) => {
+    const el = e.target;
+    switch (el.id) {
+      case 'tts-rate': {
+        // 实时滑块反馈
+        break;
+      }
+    }
+  });
+
+  document.addEventListener('click', (e) => {
+    if (e.target.id === 'tts-test-btn') {
+      const lang = document.getElementById('tts-language')?.value || 'auto';
+      const testText = lang === 'zh' || (lang === 'auto' && detectTextLang('你好，欢迎使用语音输出功能'))
+        ? '你好，欢迎使用语音输出功能。这是一条测试语音。'
+        : 'Hello, welcome to the voice output feature. This is a test message.';
+      // 同步当前设置再测试
+      _doSpeak(testText, { lang: lang === 'auto' ? detectTextLang(testText) : lang });
+    }
+  });
+}
+
+// ── 导出 ──
+const VoiceOutput = {
+  get state() { return { ..._state }; },
+  get enabled() { return _state.enabled; },
+  get speaking() { return _state.speaking; },
+  speak,
+  speakAIResponse,
+  stop,
+  togglePause,
+  getVoices,
+  getSelectedVoice,
+  getSettings,
+  updateSettings,
+  setEnabled,
+  setAutoRead,
+  toggleSettingsPanel,
+  stripMarkdown,
+};
+
+Q.VoiceOutput = VoiceOutput;
+
+// ── 初始化 ──
+loadState();
+wireSettingsEvents();
+
+// 语音列表异步加载（Chrome 等浏览器异步加载语音列表）
+// 当语音列表加载完毕后，刷新已打开面板中的发音人列表
+if (window.speechSynthesis) {
+  // 立即尝试获取语音列表
+  if (window.speechSynthesis.getVoices().length === 0) {
+    // Chrome 异步加载，等待 onvoiceschanged
+    window.speechSynthesis.onvoiceschanged = () => {
+      // 如果设置面板已打开，刷新发音人列表
+      const panel = document.getElementById('tts-settings-panel');
+      if (panel && !panel.classList.contains('hidden')) {
+        renderSettingsPanel(panel);
+      }
+    };
+  }
+}
+
+// 状态栏按钮事件绑定（全局，因为 voice-output 可能在 DOM 后就绪）
+document.addEventListener('click', (e) => {
+  if (e.target.id === 'tts-toggle-btn' || e.target.closest('#tts-toggle-btn')) {
+    e.preventDefault();
+    if (_state.enabled) {
+      if (_state.speaking) {
+        stop();
+      } else {
+        toggleSettingsPanel();
+      }
+    } else {
+      toggleSettingsPanel();
+    }
+  }
+});
+
+console.log('[VoiceOutput] Initialized (enabled:', _state.enabled, ')');

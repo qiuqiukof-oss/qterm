@@ -1,0 +1,523 @@
+/* ============================================================
+   Hesi — Modern Dark Theme
+   ============================================================ */
+
+:root,
+[data-theme="dark"] {
+  /* ── Background hierarchy (luminance-based) ── */
+  --bg-ground:     #0a0a0b;
+  --bg-surface:    #121214;
+  --bg-elevated:   #18181b;
+  --bg-overlay:    #1e1e22;
+  --bg-hover:      #27272a;
+  --bg-active:     #3f3f46;
+
+  /* ── Text ── */
+  --text-primary:   #fafafa;
+  --text-secondary: #a1a1aa;
+  --text-tertiary:  #71717a;
+
+  /* ── Accent ── */
+  --accent:        #6366f1;
+  --accent-sub:    #06b6d4;
+  --accent-hover:  #818cf8;
+  --accent-glow:   rgba(99, 102, 241, 0.15);
+
+  /* ── Semantic ── */
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --danger:  #ef4444;
+  --info:    #3b82f6;
+
+  /* ── Borders (dark: light-on-dark) ── */
+  --border-subtle:  rgba(255, 255, 255, 0.04);
+  --border-default: rgba(255, 255, 255, 0.08);
+  --border-strong:  rgba(255, 255, 255, 0.12);
+
+  /* ── Spacing / Radius / Easing / Layout / Fonts ── */
+  --space-1: 4px;  --space-2: 8px;
+  --space-3: 12px; --space-4: 16px;
+  --space-5: 20px; --space-6: 24px;
+
+  --radius-sm: 4px;  --radius-md: 6px;
+  --radius-lg: 10px; --radius-xl: 14px;
+
+  --ease-out:     cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out:  cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring:  cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  --sidebar-width: 240px;
+  --status-bar-height: 32px;
+
+  --font-ui:      -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, system-ui, sans-serif;
+  --font-mono:    'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  --font-display: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', system-ui, sans-serif;
+}
+
+/* ── Light Theme ── */
+[data-theme="light"] {
+  --bg-ground:     #f5f5f5;
+  --bg-surface:    #fafafa;
+  --bg-elevated:   #ffffff;
+  --bg-overlay:    #f0f0f0;
+  --bg-hover:      #e8e8e8;
+  --bg-active:     #d4d4d8;
+
+  --text-primary:   #18181b;
+  --text-secondary: #52525b;
+  --text-tertiary:  #a1a1aa;
+
+  --accent:        #6366f1;
+  --accent-sub:    #0891b2;
+  --accent-hover:  #4f46e5;
+  --accent-glow:   rgba(99, 102, 241, 0.12);
+
+  --success: #16a34a;
+  --warning: #d97706;
+  --danger:  #dc2626;
+  --info:    #2563eb;
+
+  /* Borders (light: dark-on-light) */
+  --border-subtle:  rgba(0, 0, 0, 0.05);
+  --border-default: rgba(0, 0, 0, 0.08);
+  --border-strong:  rgba(0, 0, 0, 0.14);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  font-family: var(--font-ui);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  overflow: hidden;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ============================================================
+   Global Progress Bar
+   ============================================================ */
+#global-progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  z-index: 9999;
+  background: transparent;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+#global-progress.active {
+  opacity: 1;
+}
+
+#global-progress::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 100%;
+  background: linear-gradient(
+    90deg,
+    var(--accent) 0%,
+    var(--accent-sub) 50%,
+    var(--accent) 100%
+  );
+  background-size: 200% 100%;
+  animation: progress-indeterminate 1.5s ease-in-out infinite;
+  border-radius: 0 2px 2px 0;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+#global-progress.active::before {
+  opacity: 1;
+}
+
+#global-progress::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 30%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.25) 50%,
+    transparent 100%
+  );
+  animation: progress-sweep 1.2s ease-in-out infinite;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+#global-progress.active::after {
+  opacity: 1;
+}
+
+@keyframes progress-indeterminate {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@keyframes progress-sweep {
+  0% { left: -30%; }
+  100% { left: 100%; }
+}
+
+/* ============================================================
+   Layout
+   ============================================================ */
+body {
+  display: flex;
+}
+
+/* ============================================================
+   Scrollbar
+   ============================================================ */
+#cli-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+#cli-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+#cli-list::-webkit-scrollbar-thumb {
+  background: var(--bg-hover);
+  border-radius: 4px;
+}
+
+#cli-list::-webkit-scrollbar-thumb:hover {
+  background: var(--bg-active);
+}
+
+/* Global scrollbar style */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--bg-hover);
+  border-radius: 4px;
+}
+
+/* ============================================================
+   Theme Refinements — Enhanced Color System
+   ============================================================ */
+:root, [data-theme="dark"] {
+  /* ── Theme-agnostic aliases (for plugin compat: finance.css, etc.) ── */
+  --border-color: var(--border-default);
+  --hover-bg:     var(--bg-hover);
+  --bg-primary:   var(--bg-ground);
+
+  /* ── Extended accent palette ── */
+  --accent-warm:   #f59e0b;
+  --accent-cool:   #06b6d4;
+  --accent-purple: #a78bfa;
+  --accent-pink:   #f472b6;
+
+  /* ── Gradient accents ── */
+  --accent-gradient: linear-gradient(135deg, var(--accent) 0%, var(--accent-sub) 100%);
+  --accent-gradient-warm: linear-gradient(135deg, var(--accent-warm) 0%, var(--accent) 100%);
+  --accent-gradient-cool: linear-gradient(135deg, var(--accent) 0%, var(--accent-cool) 100%);
+
+  /* ── Enhanced semantic colors ── */
+  --success-bg: rgba(34, 197, 94, 0.08);
+  --warning-bg: rgba(245, 158, 11, 0.08);
+  --danger-bg:  rgba(239, 68, 68, 0.08);
+  --info-bg:    rgba(99, 102, 241, 0.08);
+
+  /* ── Surface variants ── */
+  --bg-elevated-2: #202024;
+  --bg-overlay-2:  #252529;
+  /* ── Extended glow variants (for hover/border states) ── */
+  --accent-glow-2: rgba(99, 102, 241, 0.12);
+  --accent-glow-3: rgba(99, 102, 241, 0.10);
+  --accent-glow-4: rgba(99, 102, 241, 0.06);
+  --success-bg-2:   rgba(34, 197, 94, 0.10);
+  --warning-bg-2:   rgba(234, 179, 8, 0.10);
+  --danger-bg-2:    rgba(239, 68, 68, 0.10);
+
+  /* ── Overlay / shadow alpha values ── */
+  --shadow-umbra:   rgba(0, 0, 0, 0.18);
+  --shadow-penumbra: rgba(0, 0, 0, 0.12);
+  --shadow-ambient:  rgba(0, 0, 0, 0.06);
+  --shadow-light:    rgba(0, 0, 0, 0.04);
+  --modal-overlay:   rgba(0, 0, 0, 0.5);
+
+}
+
+[data-theme="light"] {
+  --accent-warm:   #d97706;
+  --accent-cool:   #0891b2;
+  --accent-purple: #7c3aed;
+  --accent-pink:   #db2777;
+
+  --accent-gradient: linear-gradient(135deg, var(--accent) 0%, var(--accent-sub) 100%);
+  --accent-gradient-warm: linear-gradient(135deg, var(--accent-warm) 0%, var(--accent) 100%);
+  --accent-gradient-cool: linear-gradient(135deg, var(--accent) 0%, var(--accent-cool) 100%);
+
+  --success-bg: rgba(22, 163, 74, 0.06);
+  --warning-bg: rgba(217, 119, 6, 0.06);
+  --danger-bg:  rgba(220, 38, 38, 0.06);
+  --info-bg:    rgba(99, 102, 241, 0.06);
+
+  --bg-elevated-2: #e8e8ec;
+  --bg-overlay-2:  #e0e0e4;
+  /* ── Extended glow variants (light theme) ── */
+  --accent-glow-2: rgba(99, 102, 241, 0.10);
+  --accent-glow-3: rgba(99, 102, 241, 0.08);
+  --accent-glow-4: rgba(99, 102, 241, 0.05);
+  --success-bg-2:   rgba(22, 163, 74, 0.08);
+  --warning-bg-2:   rgba(217, 119, 6, 0.08);
+  --danger-bg-2:    rgba(220, 38, 38, 0.08);
+
+  /* ── Overlay / shadow alpha values (light theme) ── */
+  --shadow-umbra:   rgba(0, 0, 0, 0.12);
+  --shadow-penumbra: rgba(0, 0, 0, 0.08);
+  --shadow-ambient:  rgba(0, 0, 0, 0.04);
+  --shadow-light:    rgba(0, 0, 0, 0.02);
+  --modal-overlay:   rgba(0, 0, 0, 0.3);
+
+}
+
+/* ── Active CLI glow enhancement ── */
+.cli-item.active {
+  background: linear-gradient(90deg, rgba(99, 102, 241, 0.15) 0%, rgba(99, 102, 241, 0.06) 100%);
+  border-color: rgba(99, 102, 241, 0.3);
+  box-shadow: 0 0 16px rgba(99, 102, 241, 0.1), inset 0 0 8px rgba(99, 102, 241, 0.02);
+}
+
+/* ── Status bar refinement ── */
+#status-bar {
+  background: linear-gradient(0deg, var(--bg-elevated) 0%, color-mix(in srgb, var(--bg-elevated) 90%, transparent) 100%);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-top: 1px solid var(--border-default);
+}
+
+/* ── Light theme: terminal scrollbar ── */
+[data-theme="light"] #terminal .xterm-viewport::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, var(--accent) 0%, var(--accent-sub) 100%);
+  background-clip: content-box;
+  opacity: 0.3;
+}
+
+/* ── Glass card enhancement ── */
+.welcome-card {
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="light"] .welcome-card {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+/* ============================================================
+   Theme Customizer — Popover Panel
+   ============================================================ */
+.theme-customizer {
+  position: fixed;
+  bottom: calc(var(--status-bar-height) + 4px);
+  right: 12px;
+  width: 320px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  z-index: 1000;
+  overflow: hidden;
+  transition: opacity 0.15s var(--ease-out), transform 0.15s var(--ease-out);
+  opacity: 0;
+  transform: translateY(8px) scale(0.97);
+  pointer-events: none;
+}
+.theme-customizer.visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+.tc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-default);
+}
+.tc-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.tc-close-btn {
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  transition: color 0.12s, background 0.12s;
+}
+.tc-close-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+.tc-body {
+  padding: 12px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.tc-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tc-section label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.tc-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.tc-value {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+  background: var(--bg-surface);
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+.tc-color-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tc-color-row input[type="color"] {
+  width: 32px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  background: none;
+}
+.tc-color-row input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+.tc-color-row input[type="color"]::-webkit-color-swatch {
+  border: none;
+  border-radius: 2px;
+}
+.tc-alpha-slider {
+  flex: 1;
+  height: 4px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: linear-gradient(to right, transparent, var(--tc-inner-preview, #0d0e10));
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+.tc-alpha-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--bg-surface);
+  border: 2px solid var(--accent);
+  cursor: pointer;
+}
+.tc-alpha-label {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  min-width: 36px;
+  text-align: right;
+}
+.tc-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.tc-preset {
+  font-size: 11px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.12s;
+  font-family: var(--font-ui);
+}
+.tc-preset:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+.tc-preset.active {
+  border-color: var(--accent);
+  background: var(--accent-glow);
+  color: var(--accent);
+}
+.tc-actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 4px;
+}
+.tc-btn {
+  flex: 1;
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--border-default);
+  transition: all 0.12s;
+  font-family: var(--font-ui);
+  text-align: center;
+}
+.tc-btn-primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.tc-btn-primary:hover {
+  background: var(--accent-hover);
+}
+.tc-btn-secondary {
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+}
+.tc-btn-secondary:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* ============================================================
+   Custom CSS — Injected from localStorage for user overrides
+   ============================================================ */
+#custom-css-style {
+  display: none;
+}
+
+/* ============================================================

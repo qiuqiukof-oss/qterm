@@ -1,0 +1,43 @@
+# ===== Dependencies =====
+node_modules/
+tray/node_modules/
+
+# ===== Portable Node runtime (tray offline bundle, not source) =====
+node/
+
+# ===== Agent private memory / runtime state (NEVER public) =====
+.workbuddy/
+
+# ===== Tool / analysis caches =====
+.codegraph/
+offline-cache/
+
+# ===== Runtime data =====
+data/
+uploads/
+backups/
+
+# ===== Logs =====
+*.log
+server.log
+server-test.log
+
+# ===== Local env & secrets =====
+.env
+.env.local
+
+# ===== Local MCP config (contains machine-specific absolute paths) =====
+.mcp.json
+
+# ===== Scratch / dev artifacts (not part of the shipped product) =====
+plans/
+cmd.exe.lnk
+
+# ===== OS junk =====
+.DS_Store
+Thumbs.db
+nul
+
+# ===== Generated caches / machine-specific registries (not source) =====
+.cli-discovery-cache.json
+cli-registry.json

@@ -1,0 +1,148 @@
+{
+  "name": "hesi",
+  "version": "0.1.0",
+  "description": "Hesi（合思）— Run any CLI in your browser",
+  "main": "server.js",
+  "license": "MIT",
+  "author": "Hesi Contributors",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/qiuqiukof-oss/Hesi.git"
+  },
+  "bugs": {
+    "url": "https://github.com/qiuqiukof-oss/Hesi/issues"
+  },
+  "homepage": "https://github.com/qiuqiukof-oss/Hesi#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "*.js",
+    "cli-registry.json",
+    ".env.example",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "mcp/",
+    "routes/",
+    "ws/",
+    "public/",
+    "cli-presets/",
+    "workflows/",
+    "plugins/",
+    "package.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "cli",
+    "terminal",
+    "browser-terminal",
+    "web-terminal",
+    "xterm",
+    "pty",
+    "node-pty",
+    "xterm.js",
+    "devtools",
+    "ai-agent",
+    "opencode",
+    "mcp",
+    "model-context-protocol",
+    "devops"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-search": "^0.16.0",
+    "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/addon-webgl": "^0.19.0",
+    "@xterm/xterm": "^6.0.0",
+    "compression": "^1.8.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^4.21.0",
+    "helmet": "^8.3.0",
+    "multer": "^2.2.0",
+    "node-pty": "^1.1.0",
+    "strip-ansi": "^7.2.0",
+    "uuid": "^14.0.1",
+    "ws": "^8.18.0"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.52.0"
+  },
+  "scripts": {
+    "start": "npm run check:server && node server.js",
+    "dev": "npm run check:server && node --watch server.js",
+    "build": "npm run check:server && npm run build:main && npm run build:lazy",
+    "build:main": "npx esbuild public/main.js --bundle --outfile=public/bundle.js --format=iife --minify",
+    "build:lazy": "npx esbuild public/lazy.js --bundle --outfile=public/lazy-bundle.js --format=iife --minify",
+    "build:dev": "npm run check:server && npm run build:dev:main && npm run build:dev:lazy",
+    "build:dev:main": "npx esbuild public/main.js --bundle --outfile=public/bundle.js --format=iife --sourcemap",
+    "build:dev:lazy": "npx esbuild public/lazy.js --bundle --outfile=public/lazy-bundle.js --format=iife --sourcemap",
+    "watch": "npx esbuild public/main.js --bundle --outfile=public/bundle.js --format=iife --sourcemap --watch &",
+    "watch:lazy": "npx esbuild public/lazy.js --bundle --outfile=public/lazy-bundle.js --format=iife --sourcemap --watch",
+    "check:server": "node --check server.js && node --check routes/system.js && node --check routes/health.js && node --check routes/index.js && node --check cli-discovery.js && node --check preset-loader.js && node --check rate-limiter.js && node --check ring-buffer.js && node --check ws-handler.js && node --check mcp-server.js && node --check ws/agent.js && node --check ws/agent-utils.js && node --check ws/context-store.js && node --check ws/pty.js && node --check ws/pty-policy.js && node --check lib/cli-headless.js && node --check lib/terminal-clean.js && node --check lib/env-filter.js && node --check routes/ai-tools/agent-pool.js && node --check routes/ai-tools/builtin/agent.js && node --check routes/agents.js && node --check routes/chat/discuss.js",
+    "mcp": "npm run check:server && node mcp-server.js",
+    "mcp:dev": "npm run check:server && node --watch mcp-server.js",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "postinstall": "husky || echo 'husky not initialized'",
+    "lint-staged": "lint-staged",
+    "test": "node --test --test-timeout=30000",
+    "test:frontend": "npx web-test-runner --config test/frontend/web-test-runner.config.js",
+    "format": "prettier --write \"**/*.js\" \"**/*.css\" \"**/*.json\" \"**/*.html\"",
+    "format:check": "prettier --check \"**/*.js\" \"**/*.css\" \"**/*.json\" \"**/*.html\""
+  },
+  "lint-staged": {
+    "server.js": [
+      "eslint --fix",
+      "node --check"
+    ],
+    "routes/**/*.js": [
+      "eslint --fix",
+      "node --check"
+    ],
+    "ws/**/*.js": [
+      "eslint --fix",
+      "node --check"
+    ],
+    "mcp/**/*.js": [
+      "eslint --fix",
+      "node --check"
+    ],
+    "mcp-server.js": [
+      "eslint --fix",
+      "node --check"
+    ],
+    "cli-discovery.js": [
+      "eslint --fix",
+      "node --check"
+    ],
+    "preset-loader.js": [
+      "eslint --fix",
+      "node --check"
+    ],
+    "rate-limiter.js": [
+      "eslint --fix",
+      "node --check"
+    ],
+    "ring-buffer.js": [
+      "eslint --fix",
+      "node --check"
+    ],
+    "ws-handler.js": [
+      "eslint --fix",
+      "node --check"
+    ]
+  },
+  "devDependencies": {
+    "@open-wc/testing": "^5.0.0",
+    "@web/test-runner": "^1.0.0",
+    "esbuild": "^0.28.1",
+    "eslint": "^10.7.0",
+    "globals": "^17.7.0",
+    "husky": "^9.1.0",
+    "lint-staged": "^15.2.0",
+    "prettier": "^3.9.5"
+  }
+}

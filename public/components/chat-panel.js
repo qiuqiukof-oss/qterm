@@ -1,0 +1,1357 @@
+// ============================================================
+// <chat-panel> — Web Component wrapping AI Chat Drawer
+//
+// Phase 2: Extracts chat panel logic from app.js into a
+// Custom Element. Uses existing DOM in index.html (Light DOM).
+//
+// API
+//   element.toggle()
+//   element.sendMessage()
+//   element.clearHistory()
+//   element.appendToDOM(msg)
+//   element.showThinking()
+//   element.removeThinking()
+//   element.scrollToBottom()
+//   Q.ChatUI.* (delegated via microtask patch)
+// ============================================================
+// @ts-check
+'use strict';
+
+import { safeStorage } from '../lib/storage.js';
+import AgentSessionRenderer from './agent-session-renderer.js';
+
+/** @typedef {import('../types').QCLI} QCLI */
+/** @typedef {{role:string, content:string}} ChatMessage */
+/** @typedef {{name:string, durMs:number, status:string}} ToolCallInfo */
+/** @typedef {{type:string, names?:string[], name?:string, durMs?:number}} ToolCallEvent */
+
+// ============================================================
+// Markdown renderer — lightweight, no external deps
+// ============================================================
+
+/** @param {string} text @returns {string} */
+function escapeHtml(text) {
+  const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+  return text.replace(/[&<>"']/g, c => map[c]);
+}
+
+/** @returns {QCLI} */
+function qcli() { return /** @type {QCLI} */ (window.QCLI || {}); }
+
+/** @param {string} text @returns {string} */
+function renderMarkdown(text) {
+  if (!text) return '';
+  // Escape HTML first, then apply markdown patterns
+  let html = escapeHtml(text);
+
+  // Code blocks (processed first so inner content is safe)
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+    const trimmedCode = code.trimEnd();
+    const escapedCode = escapeHtml(trimmedCode);
+    const escapedLang = lang ? escapeHtml(lang) : '';
+    const langBadge = lang ? `<span class="md-code-lang">${escapedLang}</span>` : '';
+
+    // Mermaid 代码块：渲染为流程图而非普通代码
+    if (lang === 'mermaid') {
+      return `<div class="mermaid">${escapedCode}</div>`;
+    }
+
+    return `<div class="md-code-block">`
+      + `<div class="md-code-header">${langBadge}<button class="md-copy-btn" title="复制">📋</button></div>`
+      + `<pre><code>${escapedCode}</code></pre>`
+      + `<button class="cmd-send-btn" title="发送该命令到当前终端">▶ 发送到终端</button>`
+      + `</div>`;
+  });
+
+  // Inline code
+  html = html.replace(/`([^`]+)`/g, '<code class="md-inline-code">$1</code>');
+
+  // Bold
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+
+  // Italic
+  html = html.replace(/\*(.+?)\*/g, (_, t) => t.trim() ? `<em>${t}</em>` : `*${t}*`);
+
+  // Horizontal rules (---)
+  html = html.replace(/^---$/gm, '<hr class="md-hr">');
+
+  // Line breaks
+  html = html.replace(/\n/g, '<br>');
+
+  return html;
+}
+
+class ChatPanel extends HTMLElement {
+  constructor() {
+    super();
+    /** @type {boolean} */
+    this.open = false;
+    /** @type {Array} */
+    this.messages = [];
+    /** @type {boolean} */
+    this.sending = false;
+    /** @type {AbortController|null} */
+    this._abortController = null;
+
+    // DOM refs — set in connectedCallback
+    this.el = null;
+    this.msgsEl = null;
+    this.input = null;
+    this.sendBtn = null;
+    this.toggleBtn = null;
+    this.closeBtn = null;
+    this.clearBtn = null;
+    this.resizeHandle = null;
+    this.terminalToggleBtn = null;
+    this.exportBtn = null;
+    this.mermaidPreviewEl = null;
+    this._mermaidPreviewTimer = null;
+
+    this._unsubs = [];
+    /** @type {string} */
+    this._lastTerminalHash = '';
+    /** @type {string[]|null} */
+    this._lastTerminalLines = null;
+    /** @type {string[]|null} */
+    this._pendingTerminalLines = null;
+    /** @type {boolean} */
+    this._terminalContextEnabled = true;
+    /** @type {Array<{name:string, durMs:number, status:string}>} */
+    this._activeToolCalls = [];
+    /** @type {{input_tokens?:number, output_tokens?:number, prompt_tokens?:number, completion_tokens?:number, total_tokens?:number}|null} */
+    this._lastUsage = null;
+    /** @type {AgentSessionRenderer|null} */
+    this._agentRenderer = null;
+
+    // ── AI 讨论模式状态 ──
+    this._discussEnabled = false;     // 开关是否打开
+    this._discussPartner = '';        // 选定的主 CLI Agent（兼容旧字段）
+    this._discussPartners = [];       // 多选：参与讨论的全部 CLI Agent id
+    this._discussMaxTurns = 6;        // 最多回合
+    this._discussActive = false;      // 当前是否正在渲染某发言方气泡
+    this._activeDiscussBubble = null; // 当前发言方气泡 DOM
+    this._discussText = '';           // 当前气泡累积文本
+    this._discussPendingMsg = null;   // 待落盘的消息对象
+    this._agentNameMap = new Map();   // id -> displayName（用于多选按钮文案）
+    this._noAgents = false;           // 是否已确认无任何可用 CLI Agent（用于「去安装」引导）
+  }
+
+  // ── Lifecycle ──
+
+  connectedCallback() {
+    this.el = document.getElementById('chat-drawer');
+    this.msgsEl = document.getElementById('chat-messages');
+    this.input = /** @type {HTMLTextAreaElement|null} */ (document.getElementById('chat-input'));
+    this.sendBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('chat-send-btn'));
+    this.toggleBtn = document.getElementById('chat-toggle-btn');
+    this.closeBtn = document.getElementById('chat-close-btn');
+    this.clearBtn = document.getElementById('chat-clear-btn');
+    this.terminalToggleBtn = document.getElementById('chat-terminal-toggle');
+    this.exportBtn = document.getElementById('chat-export-btn');
+    this.resizeHandle = document.getElementById('chat-resize-handle');
+
+    if (!this.el) {
+      console.warn('[ChatPanel] #chat-drawer not found');
+      return;
+    }
+
+    this._setupEvents();
+    this._setupDiscussControls();
+    this._restoreState();
+    this._patchQCLI();
+
+    // Subscribe to stores — sync component state to store FIRST so the
+    // immediate callback on subscribe() doesn't falsely toggle() back
+    const Q = qcli();
+    if (Q.chatStore) {
+      Q.chatStore.setState({ open: this.open });
+      this._unsubs.push(Q.chatStore.subscribe((s) => {
+        if (s.open !== this.open) this.toggle();
+        if (s.sending !== this.sending) this.sending = s.sending;
+      }));
+    }
+  }
+
+  disconnectedCallback() {
+    for (const unsub of this._unsubs) unsub();
+    this._unsubs = [];
+  }
+
+  // ── QCLI namespace patch (deferred, runs after app.js) ──
+
+  _patchQCLI() {
+    Promise.resolve().then(() => {
+      const Q = window.QCLI || {};
+      Q.ChatUI = Q.ChatUI || {};
+      if (!Q.ChatUI._patched) {
+        Q.ChatUI.sendChatMessage = () => this.sendMessage();
+        Q.ChatUI.toggleChat = () => this.toggle();
+        Q.ChatUI.clearChatHistory = () => this.clearHistory();
+        Q.ChatUI.appendMessageToDOM = (msg, animate) => this.appendToDOM(msg, animate);
+        Q.ChatUI.showThinkingIndicator = () => this.showThinking();
+        Q.ChatUI.removeThinkingIndicator = () => this.removeThinking();
+        Q.ChatUI.scrollChatToBottom = () => this.scrollToBottom();
+        // Agent 事件 → 委托给 AgentSessionRenderer
+        if (!this._agentRenderer) {
+          this._agentRenderer = new AgentSessionRenderer(this);
+        }
+        Q.ChatUI.onAgentMetric = (data) => this._agentRenderer.onAgentMetric(data);
+        Q.ChatUI._patched = true;
+      }
+    });
+  }
+
+  // ── Mermaid 实时预览 ──
+
+  /** 初始化预览面板 DOM */
+  _initMermaidPreview() {
+    if (this.mermaidPreviewEl) return;
+    this.mermaidPreviewEl = document.createElement('div');
+    this.mermaidPreviewEl.className = 'mermaid-preview-panel hidden';
+    this.mermaidPreviewEl.innerHTML = `
+      <div class="mermaid-preview-header">
+        <span class="mermaid-preview-title">📐 Mermaid 预览</span>
+        <button class="mermaid-preview-close" title="关闭预览">✕</button>
+      </div>
+      <div class="mermaid-preview-body"></div>
+    `;
+    // 插入到聊天消息区和输入区之间
+    if (this.msgsEl && this.msgsEl.parentElement) {
+      this.msgsEl.parentElement.insertBefore(this.mermaidPreviewEl, this.input?.closest('.chat-input-area') || this.msgsEl.nextSibling);
+    } else if (this.el) {
+      this.el.appendChild(this.mermaidPreviewEl);
+    }
+
+    // 关闭按钮
+    const closeBtn = this.mermaidPreviewEl.querySelector('.mermaid-preview-close');
+    if (closeBtn) {
+      closeBtn.addEventListener('click', () => this._clearMermaidPreview());
+    }
+  }
+
+  /** 从文本中提取 mermaid 代码 */
+  _extractMermaidCode(text) {
+    const regex = /```mermaid\n?([\s\S]*?)```/i;
+    const match = text.match(regex);
+    return match ? match[1].trim() : null;
+  }
+
+  /** 防抖检测 Mermaid 代码并渲染预览 */
+  _checkMermaidPreview() {
+    if (this._mermaidPreviewTimer) {
+      clearTimeout(this._mermaidPreviewTimer);
+    }
+    this._mermaidPreviewTimer = setTimeout(() => {
+      this._mermaidPreviewTimer = null;
+      this._doMermaidPreview();
+    }, 300);
+  }
+
+  /** 实际渲染预览 */
+  _doMermaidPreview() {
+    if (!this.input || !this.mermaidPreviewEl) return;
+    const text = this.input.value;
+    const code = this._extractMermaidCode(text);
+    const body = this.mermaidPreviewEl.querySelector('.mermaid-preview-body');
+    if (!body) return;
+
+    if (!code) {
+      this._clearMermaidPreview();
+      return;
+    }
+
+    // 显示预览面板
+    this.mermaidPreviewEl.classList.remove('hidden');
+
+    // 渲染 Mermaid
+    body.innerHTML = `<div class="mermaid-preview-content"><div class="mermaid">${this._escapeHtml(code)}</div></div>`;
+
+    // 使用现有 MermaidRenderer 渲染
+    requestAnimationFrame(() => {
+      if (window.QCLI?.MermaidRenderer) {
+        window.QCLI.MermaidRenderer.renderAll();
+      }
+    });
+  }
+
+  /** 清空并隐藏预览 */
+  _clearMermaidPreview() {
+    if (this.mermaidPreviewEl) {
+      this.mermaidPreviewEl.classList.add('hidden');
+      const body = this.mermaidPreviewEl.querySelector('.mermaid-preview-body');
+      if (body) body.innerHTML = '';
+    }
+  }
+
+  /** HTML 转义 */
+  _escapeHtml(text) {
+    const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+    return text.replace(/[&<>"']/g, c => map[c]);
+  }
+
+  // ── AI 讨论模式工具栏（🤝 开关 + 多选 CLI Agent + 回合数）──
+  _setupDiscussControls() {
+    const toggle = document.getElementById('discuss-toggle');
+    const btn = document.getElementById('discuss-partner-btn');
+    const dropdown = document.getElementById('discuss-partner-dropdown');
+    const roundsSel = document.getElementById('discuss-rounds');
+    const controls = document.getElementById('discuss-controls');
+    if (!toggle || !btn || !dropdown || !roundsSel || !controls) return;
+
+    this._discussPartners = [];
+    this._agentNameMap = new Map();
+
+    // 多选按钮文案：0 个 → 占位提示；1 个 → 显示名称；多个 → “已选 N 个”
+    const updateBtnLabel = () => {
+      if (this._noAgents) {
+        btn.textContent = '未安装 Agent · 点击安装 ▾';
+        btn.classList.add('placeholder');
+        return;
+      }
+      if (this._discussPartners.length === 0) {
+        btn.textContent = '选择 CLI Agent ▾';
+        btn.classList.add('placeholder');
+      } else if (this._discussPartners.length === 1) {
+        btn.textContent = (this._agentNameMap.get(this._discussPartners[0]) || this._discussPartners[0]) + ' ▾';
+        btn.classList.remove('placeholder');
+      } else {
+        btn.textContent = `已选 ${this._discussPartners.length} 个 Agent ▾`;
+        btn.classList.remove('placeholder');
+      }
+    };
+
+    const sync = () => {
+      this._discussEnabled = !!toggle.checked;
+      this._discussMaxTurns = parseInt(roundsSel.value, 10) || 6;
+      this._discussPartners = Array.from(dropdown.querySelectorAll('input[type="checkbox"]:checked'))
+        .map(cb => cb.dataset.id);
+      this._discussPartner = this._discussPartners[0] || '';
+      // 开关常驻可见；勾选后才展开「选择 CLI Agent + 轮数」控件
+      controls.style.display = this._discussEnabled ? 'flex' : 'none';
+      // 关闭讨论开关时收起下拉，避免遮挡
+      if (this._discussEnabled) dropdown.classList.add('hidden');
+      updateBtnLabel();
+    };
+
+    toggle.addEventListener('change', sync);
+    roundsSel.addEventListener('change', sync);
+    dropdown.addEventListener('change', sync);
+
+    // 点击按钮切换下拉显隐
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      dropdown.classList.toggle('hidden');
+    });
+    // 点击其它区域收起下拉
+    document.addEventListener('click', (e) => {
+      if (!dropdown.contains(e.target) && e.target !== btn && !btn.contains(e.target)) {
+        dropdown.classList.add('hidden');
+      }
+    });
+
+    // 拉取已安装的 CLI Agent + 注册表中所有 agent 类 CLI，并与左侧栏「收藏夹」同步
+    Promise.all([
+      fetch('/api/agents').then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch('/api/clis').then(r => r.ok ? r.json() : null).catch(() => null),
+    ]).then(([agentsData, clisData]) => {
+      const list = (agentsData && agentsData.agents ? agentsData.agents : []).filter(a => a.installed);
+      // 合并注册表中 category==='agent' 但不在 /api/agents 的 CLI（如 mimo / opencli）
+      const registryAgents = (clisData && clisData.clis ? clisData.clis : [])
+        .filter(c => (c.category || '') === 'agent');
+      const seen = new Set(list.map(a => a.id));
+      for (const c of registryAgents) {
+        if (!seen.has(c.id)) {
+          seen.add(c.id);
+          list.push({ id: c.id, name: c.name, displayName: c.name, version: c.version || '', installed: true, fromRegistry: true });
+        }
+      }
+      // 读取左侧栏收藏夹（localStorage: qcli-favorites）
+      const favs = (window.QCLI && typeof window.QCLI.getFavorites === 'function') ? window.QCLI.getFavorites() : [];
+      const favSet = new Set(favs);
+      dropdown.innerHTML = '';
+      this._agentNameMap = new Map();
+      if (list.length === 0) {
+        // 未安装任何 CLI Agent：给出「前往安装」的可点击引导（不打断流程）
+        this._noAgents = true;
+        const empty = document.createElement('div');
+        empty.className = 'discuss-dropdown-empty discuss-install-hint';
+        empty.innerHTML = '➕ 未发现可用 CLI Agent<br><span class="discuss-install-link">点击前往安装（opencode / codex / aider…）</span>';
+        empty.addEventListener('click', () => {
+          const Q = qcli();
+          const wl = document.getElementById('welcome-overlay');
+          if (wl) wl.classList.remove('hidden');
+          if (Q.showToast) Q.showToast('请在欢迎页「🤖 AI 智能体」区一键安装 CLI Agent', 'info');
+        });
+        dropdown.appendChild(empty);
+        btn.disabled = false; // 允许点开下拉查看安装引导
+        btn.classList.add('placeholder');
+      } else {
+        this._noAgents = false;
+        btn.disabled = false;
+        // 收藏优先排序
+        list.sort((a, b) => {
+          const af = favSet.has(a.id) ? 0 : 1;
+          const bf = favSet.has(b.id) ? 0 : 1;
+          if (af !== bf) return af - bf;
+          return (a.name || '').localeCompare(b.name || '');
+        });
+        // 收藏夹同步提示
+        const availableFavs = list.filter(a => favSet.has(a.id)).length;
+        if (availableFavs > 0) {
+          const hint = document.createElement('div');
+          hint.className = 'discuss-fav-hint';
+          hint.textContent = `★ 已与左侧「收藏夹」同步（${availableFavs} 个）`;
+          dropdown.appendChild(hint);
+        }
+        for (const a of list) {
+          const name = a.displayName || a.name;
+          const isFav = favSet.has(a.id);
+          this._agentNameMap.set(a.id, name);
+          const label = document.createElement('label');
+          label.className = 'discuss-option' + (isFav ? ' favorited' : '');
+          const cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.dataset.id = a.id;
+          if (isFav) cb.checked = true; // 与收藏夹同步：默认勾选
+          label.appendChild(cb);
+          const star = document.createElement('span');
+          star.className = 'discuss-fav-star';
+          star.textContent = isFav ? '★ ' : '';
+          label.appendChild(star);
+          label.appendChild(document.createTextNode(name + (a.version ? ' · ' + a.version : '')));
+          dropdown.appendChild(label);
+        }
+      }
+      sync();
+    }).catch(() => { sync(); });
+    sync();
+  }
+
+  // ── Event setup ──
+
+  _setupEvents() {
+    // 初始化 Mermaid 预览面板
+    Promise.resolve().then(() => this._initMermaidPreview());
+    const Q = qcli();
+
+    if (this.toggleBtn) {
+      this.toggleBtn.addEventListener('click', () => this.toggle());
+    }
+    if (this.closeBtn) {
+      this.closeBtn.addEventListener('click', () => this.toggle());
+    }
+    if (this.sendBtn) {
+      this.sendBtn.addEventListener('click', () => {
+        if (this.sending) {
+          this.stopGeneration();
+        } else {
+          this.sendMessage();
+        }
+      });
+    }
+
+    // 拖拽放入 Mermaid 图表到聊天输入区
+    const inputArea = this.el?.querySelector('.chat-input-area');
+    if (inputArea) {
+      inputArea.addEventListener('dragover', (e) => {
+        // 只接受携带 mermaid 数据的拖放
+        if (e.dataTransfer.types.includes('text/x-mermaid')) {
+          e.preventDefault();
+          e.stopPropagation();
+          e.dataTransfer.dropEffect = 'copy';
+          inputArea.classList.add('chat-input-droptarget');
+        }
+      });
+      inputArea.addEventListener('dragleave', (e) => {
+        // 防止子元素边界导致闪烁：仅当真正离开 inputArea 时才移除高亮
+        if (!inputArea.contains(e.relatedTarget)) {
+          inputArea.classList.remove('chat-input-droptarget');
+        }
+      });
+      inputArea.addEventListener('drop', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        inputArea.classList.remove('chat-input-droptarget');
+        const source = e.dataTransfer.getData('text/x-mermaid');
+        if (!source || !this.input) return;
+
+        // 构造 mermaid 代码块文本
+        const mermaidBlock = '```mermaid\n' + source + '\n```';
+
+        // 插入到光标位置，前后加空行
+        const start = this.input.selectionStart;
+        const end = this.input.selectionEnd;
+        const before = this.input.value.substring(0, start);
+        const after = this.input.value.substring(end);
+        const prefix = (before.trim() ? '\n\n' : '');
+        const suffix = (after.trim() ? '\n\n' : '');
+        this.input.value = before + prefix + mermaidBlock + suffix + after;
+
+        // 触发 input 事件让预览面板更新
+        this.input.dispatchEvent(new Event('input'));
+        this.input.focus();
+
+        // 打开聊天面板（如果尚未打开）
+        if (!this.open) this.toggle();
+
+        if (Q.showToast) Q.showToast('✅ 图表已拖入聊天输入区', 'success');
+      });
+    }
+
+    // Event delegation: send-to-terminal + copy buttons inside chat messages
+    if (this.msgsEl) {
+      this.msgsEl.addEventListener('click', (e) => {
+        const cmdBtn = e.target.closest('.cmd-send-btn');
+        if (cmdBtn) {
+          // Find the code text from the preceding <pre><code>
+          const pre = cmdBtn.parentElement?.querySelector('pre code');
+          if (pre) {
+            const cmd = pre.textContent;
+            const Q = qcli();
+            if (Q.wsSend && Q.Tabs?.activeTabId) {
+              Q.wsSend({ type: 'input', data: cmd + '\n', tabId: Q.Tabs.activeTabId });
+              if (Q.showToast) Q.showToast('已发送到终端', 'info');
+            }
+          }
+          return;
+        }
+        const copyBtn = e.target.closest('.md-copy-btn');
+        if (copyBtn) {
+          const pre = copyBtn.closest('.md-code-block')?.querySelector('pre code');
+          if (pre) {
+            navigator.clipboard.writeText(pre.textContent).catch(() => {});
+            copyBtn.textContent = '✅';
+            setTimeout(() => { copyBtn.textContent = '📋'; }, 1500);
+          }
+        }
+      });
+    }
+    if (this.terminalToggleBtn) {
+      this.terminalToggleBtn.addEventListener('click', () => this._toggleTerminalContext());
+    }
+    if (this.clearBtn) {
+      this.clearBtn.addEventListener('click', () => this.clearHistory());
+    }
+    if (this.exportBtn) {
+      this.exportBtn.addEventListener('click', () => this.exportChat());
+    }
+    // ── Drag resize via resize handle ──
+    if (this.resizeHandle) {
+      let isResizing = false;
+      let resizeRAF = null;
+
+      const getTerminalContainer = () =>
+        document.getElementById('terminal-container') || this.el.parentElement;
+
+      const onMouseMove = (e) => {
+        if (!isResizing) return;
+        if (resizeRAF) return;
+        resizeRAF = requestAnimationFrame(() => {
+          resizeRAF = null;
+          const container = getTerminalContainer();
+          const containerRect = container.getBoundingClientRect();
+          let newHeight = containerRect.bottom - e.clientY;
+          if (newHeight < 120) newHeight = 120;
+          if (newHeight > containerRect.height * 0.95) newHeight = containerRect.height * 0.95;
+          this._applyHeight(Math.round(newHeight));
+        });
+      };
+
+      const onMouseUp = () => {
+        if (!isResizing) return;
+        isResizing = false;
+        if (resizeRAF) {
+          cancelAnimationFrame(resizeRAF);
+          resizeRAF = null;
+        }
+        this.resizeHandle.classList.remove('active');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        this._refitTerminal();
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+      };
+
+      this.resizeHandle.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        isResizing = true;
+        this.resizeHandle.classList.add('active');
+        document.body.style.cursor = 'row-resize';
+        document.body.style.userSelect = 'none';
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+      });
+    }
+
+    if (this.input) {
+      this.input.addEventListener('input', () => {
+        this._autoResize();
+        this._checkMermaidPreview();
+      });
+      this.input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          if (this.sending) {
+            this.stopGeneration();
+          } else {
+            this.sendMessage();
+          }
+        }
+        if (e.key === 'Escape' && this.open) {
+          e.preventDefault();
+          if (this.sending) {
+            this.stopGeneration();
+          } else {
+            this.toggle();
+            const term = qcli().Tabs?.term || qcli().term;
+            if (term && typeof term.focus === 'function') {
+              try { term.focus(); } catch (_) { /* term may be disposed — non-critical; user will refocus manually */ }
+            }
+          }
+        }
+      });
+    }
+  }
+
+  // ── Restore persisted state ──
+
+  // ── Terminal Context Toggle ──
+
+  _toggleTerminalContext() {
+    this._terminalContextEnabled = !this._terminalContextEnabled;
+    safeStorage.set('qcli-terminal-context', this._terminalContextEnabled ? '1' : '0');
+    this._updateTerminalToggleUI();
+    const Q = qcli();
+    const msg = this._terminalContextEnabled
+      ? (Q.__?.('chat.terminalOn') || '终端上下文已启用')
+      : (Q.__?.('chat.terminalOff') || '终端上下文已禁用');
+    if (Q.showToast) Q.showToast(msg, 'info');
+  }
+
+  _updateTerminalToggleUI() {
+    if (!this.terminalToggleBtn) return;
+    const Q = qcli();
+    if (this._terminalContextEnabled) {
+      this.terminalToggleBtn.classList.add('active');
+      this.terminalToggleBtn.title = Q.__?.('chat.terminalOn') || '终端上下文：已启用';
+    } else {
+      this.terminalToggleBtn.classList.remove('active');
+      this.terminalToggleBtn.title = Q.__?.('chat.terminalOff') || '终端上下文：已禁用';
+    }
+  }
+
+  _restoreState() {
+    this._applyHeight(this._getSavedHeight());
+    const ctxSaved = safeStorage.get('qcli-terminal-context');
+    if (ctxSaved === '0') {
+      this._terminalContextEnabled = false;
+    }
+    this._updateTerminalToggleUI();
+    this._loadHistory();
+    const wasOpen = safeStorage.get('qcli-chat-open');
+    if (wasOpen === '1') {
+      this.toggle();
+    }
+  }
+
+  _getSavedHeight() {
+    const saved = safeStorage.get('qcli-chat-height');
+    if (saved) {
+      const h = parseInt(saved, 10);
+      if (h >= 120) return h;
+    }
+    return 280;
+  }
+
+  _applyHeight(height) {
+    if (this.el) this.el.style.height = height + 'px';
+    safeStorage.set('qcli-chat-height', String(height));
+    this._refitTerminal();
+  }
+
+  _refitTerminal() {
+    const Q = qcli();
+    requestAnimationFrame(() => {
+      // tabs.js sets Q.Tabs.fitAddon to the real FitAddon instance (or null)
+      const fa = Q.Tabs?.fitAddon || Q.fitAddon;
+      if (fa && typeof fa.fit === 'function') {
+        try { fa.fit(); } catch (e) { console.debug('[ChatPanel] fitAddon.fit:', e?.message); }
+        const state = Q.state;
+        if (state && state.launched) {
+          const dims = fa.proposeDimensions();
+          if (dims && Q.wsSend) {
+            Q.wsSend({ type: 'resize', cols: dims.cols, rows: dims.rows, tabId: Q.Tabs?.activeTabId });
+          }
+        }
+      }
+    });
+  }
+
+  _loadHistory() {
+    const msgs = safeStorage.getJSON('qcli-chat-history');
+    if (Array.isArray(msgs) && msgs.length > 0) {
+      this.messages = msgs;
+      const welcome = this.msgsEl?.querySelector('.welcome-msg');
+      if (welcome) welcome.remove();
+      this.renderAll();
+    }
+  }
+
+  _saveHistory() {
+    const toSave = this.messages.filter(m => m.role === 'user' || m.role === 'assistant');
+    safeStorage.setJSON('qcli-chat-history', toSave.slice(-50));
+  }
+
+  // ── Textarea auto-resize ──
+
+  _autoResize() {
+    if (!this.input) return;
+    this.input.style.height = 'auto';
+    this.input.style.height = Math.min(this.input.scrollHeight, 120) + 'px';
+  }
+
+  // ── Public: Toggle drawer ──
+
+  toggle() {
+    const Q = qcli();
+    this.open = !this.open;
+    if (this.el) this.el.classList.toggle('hidden', !this.open);
+    if (this.toggleBtn) this.toggleBtn.classList.toggle('active', this.open);
+
+    this._refitTerminal();
+
+    if (this.open && this.input) {
+      setTimeout(() => this.input.focus(), 100);
+    }
+
+    if (this.open) {
+      this._applyHeight(this._getSavedHeight());
+    }
+
+    safeStorage.set('qcli-chat-open', this.open ? '1' : '0');
+
+    // Sync to store
+    if (Q.chatStore) Q.chatStore.setState({ open: this.open });
+  }
+
+  // ── Public: Send message ──
+
+  sendMessage() {
+    const Q = qcli();
+    const text = this.input?.value.trim();
+    if (!text || this.sending) return;
+
+    this.sending = true;
+    this._abortController = new AbortController();
+    this._activeToolCalls = [];
+    if (this.input) {
+      this.input.value = '';
+      this.input.style.height = 'auto';
+    }
+    // 清空 Mermaid 预览
+    this._clearMermaidPreview();
+    if (this.sendBtn) {
+      this.sendBtn.textContent = '■';
+      this.sendBtn.classList.add('stop-btn');
+      this.sendBtn.title = '停止生成';
+      this.sendBtn.disabled = false;
+    }
+
+    // Add user message
+    const userMsg = { role: 'user', content: text };
+    this.messages.push(userMsg);
+    this.appendToDOM(userMsg);
+    this._saveHistory();
+    this.scrollToBottom();
+
+    // Show thinking indicator
+    this.showThinking();
+    this.scrollToBottom();
+
+    // Sync sending state to store
+    if (Q.chatStore) Q.chatStore.setState({ sending: true });
+
+    // Capture the abort controller for this request in the closure
+    // so onDone/onError can detect if THIS specific request was aborted
+    // (prevents race conditions when user aborts and immediately sends a new message)
+    const requestController = this._abortController;
+
+    // Real AI API or mock fallback
+    const api = Q.ChatAPI;
+    if (api) {
+      api.isConfigured().then(configured => {
+        if (!configured) {
+          this._mockResponse();
+          return;
+        }
+
+        const msgs = this.messages.slice(-50).map(m => ({ role: m.role, content: m.content }));
+        let fullResponse = '';
+
+        // ── Read terminal buffer for AI context (incremental diff) ──
+        let terminalContext = '';
+        let currentTerminalHash = '';
+        let contextChanged = false;
+        if (this._terminalContextEnabled) {
+          const term = Q.Tabs?.term;
+          if (term && term.buffer) {
+            try {
+              const buffer = term.buffer.active;
+              const totalLines = buffer.length;
+              const maxLines = 100;
+              const start = Math.max(0, totalLines - maxLines);
+              const currentLines = [];
+              for (let y = start; y < totalLines; y++) {
+                const line = buffer.getLine(y);
+                if (line) currentLines.push(line.translateToString());
+              }
+              const fullText = currentLines.join('\n');
+              // Hash for change detection
+              const trimmed = fullText.trim();
+              currentTerminalHash = trimmed
+                ? trimmed.slice(0, 50) + '|' + trimmed.slice(-50) + '|' + trimmed.length
+                : '';
+              contextChanged = currentTerminalHash && currentTerminalHash !== this._lastTerminalHash;
+
+              if (contextChanged && this._lastTerminalLines && this._lastTerminalLines.length > 0) {
+                // Incremental diff: find first changed line scanning from the bottom up
+                const oldLines = this._lastTerminalLines;
+                const newLines = currentLines;
+                let diffIndex = 0; // 0-based index in newLines where change starts
+                const minLen = Math.min(oldLines.length, newLines.length);
+
+                for (let i = 1; i <= minLen; i++) {
+                  if (oldLines[oldLines.length - i] !== newLines[newLines.length - i]) {
+                    diffIndex = newLines.length - i;
+                    break;
+                  }
+                }
+
+                // Include 3 lines of context before the change
+                const contextStart = Math.max(0, diffIndex - 3);
+                const deltaLines = newLines.slice(contextStart);
+                const deltaSize = deltaLines.length;
+
+                // Only use delta if it's significantly smaller than full content
+                if (contextStart > 0 && deltaSize < newLines.length * 0.7) {
+                  const header = `[... 以上 ${contextStart} 行未变化，已省略 ...]`;
+                  terminalContext = header + '\n' + deltaLines.join('\n');
+                } else {
+                  terminalContext = fullText;
+                }
+              } else {
+                // First time or unchanged: send full context
+                terminalContext = fullText;
+              }
+
+              // Save snapshot for next comparison (only read, not yet "committed")
+              this._pendingTerminalLines = currentLines;
+            } catch (e) { /* terminal buffer not available */ }
+          }
+        }
+
+        api.sendMessage({
+          messages: msgs,
+          terminalContext: terminalContext || undefined,
+          terminalContextChanged: contextChanged,
+          signal: requestController?.signal,
+          discuss: this._discussEnabled,
+          partner: this._discussPartner,
+          partners: this._discussPartners,
+          maxTurns: this._discussMaxTurns,
+          onDiscuss: (evt) => this._handleDiscussEvent(evt),
+          onToolCall: (evt) => {
+            if (evt.type === 'start') {
+              for (const n of evt.names || []) {
+                this._activeToolCalls.push({ name: n, durMs: 0, status: 'running' });
+              }
+            } else if (evt.type === 'end') {
+              const tc = this._activeToolCalls.find(t => t.name === evt.name && t.status === 'running');
+              if (tc) {
+                tc.durMs = evt.durMs ?? 0;
+                tc.status = 'done';
+              }
+            }
+          },
+          onStatus: (msg) => {
+            const indicator = document.getElementById('thinking-indicator');
+            if (indicator) {
+              const bubble = indicator.querySelector('.msg-bubble');
+              if (bubble && bubble.classList.contains('thinking')) {
+                // Update status text inside the thinking indicator
+                const statusEl = bubble.querySelector('.thinking-status');
+                if (statusEl) {
+                  statusEl.textContent = '🔧 ' + msg;
+                  statusEl.classList.add('visible');
+                }
+              }
+            }
+          },
+          onToken: (token) => {
+            // 讨论模式：token 直接追加到「当前发言方气泡」，而非思考指示器
+            if (this._discussActive && this._activeDiscussBubble) {
+              this._discussText += token;
+              const bubble = this._activeDiscussBubble;
+              bubble.innerHTML = renderMarkdown(this._discussText) + '<span class="typing-cursor"></span>';
+              requestAnimationFrame(() => {
+                if (window.QCLI?.MermaidRenderer) window.QCLI.MermaidRenderer.renderAll();
+              });
+              this.scrollToBottom();
+              return;
+            }
+            fullResponse += token;
+            const indicator = document.getElementById('thinking-indicator');
+            if (indicator) {
+              const bubble = indicator.querySelector('.msg-bubble');
+              if (bubble) {
+                if (bubble.classList.contains('thinking')) {
+                  bubble.classList.remove('thinking');
+                  bubble.innerHTML = '';
+                }
+                // Render markdown with a subtle cursor at the end
+                bubble.innerHTML = renderMarkdown(fullResponse) + '<span class="typing-cursor"></span>';
+                // 渲染 Mermaid 流程图
+                requestAnimationFrame(() => {
+                  if (window.QCLI?.MermaidRenderer) {
+                    window.QCLI.MermaidRenderer.renderAll();
+                  }
+                });
+                this.scrollToBottom();
+              }
+            }
+          },
+          onUsage: (usage) => {
+            this._lastUsage = usage;
+          },
+          onToolLive: (evt) => {
+            // Agent 实时事件：在思考指示器里展示进度，减少“卡住/断开”错觉
+            const indicator = document.getElementById('thinking-indicator');
+            if (!indicator) return;
+            const bubble = indicator.querySelector('.msg-bubble');
+            const statusEl = bubble?.querySelector?.('.thinking-status');
+            if (!statusEl) return;
+            statusEl.classList.add('visible');
+            const ev = evt?.ev;
+            if (ev === 'agent_callback') {
+              statusEl.textContent = `💬 ${evt.agent || 'Agent'} 求助：${(evt.question || '').slice(0, 120)}`;
+            } else if (ev === 'agent_output') {
+              const tail = (evt.data || '').slice(-160).replace(/\n+/g, ' ');
+              statusEl.textContent = `📜 ${evt.agent || 'Agent'}：${tail}`;
+            } else if (ev === 'agent_start') {
+              statusEl.textContent = `⚡ ${evt.agent || 'Agent'} 已启动`;
+            } else if (ev === 'agent_done') {
+              statusEl.textContent = `✅ ${evt.agent || 'Agent'} 完成`;
+            }
+          },
+          onDone: () => {
+            this.removeThinking();
+
+            // 讨论模式：各发言气泡已在 discuss_end 时落盘，这里不再追加空 assistant 消息
+            if (this._discussActive) {
+              this._discussActive = false;
+              this._activeDiscussBubble = null;
+              this._discussText = '';
+              this._endSending();
+              if (this.input) this.input.focus();
+              return;
+            }
+
+            // Check if THIS specific request was aborted by the user
+            // requestController is captured in closure — even if a new message
+            // has been sent, this closure's controller still reflects this request's state
+            if (requestController?.signal.aborted) {
+              // Aborted: discard pending snapshot + don't save empty message
+              this._pendingTerminalLines = null;
+              this._endSending();
+              if (this.input) this.input.focus();
+              return;
+            }
+
+            // Successfully completed: commit terminal snapshot
+            if (currentTerminalHash) {
+              this._lastTerminalHash = currentTerminalHash;
+            }
+            if (this._pendingTerminalLines) {
+              this._lastTerminalLines = this._pendingTerminalLines;
+              this._pendingTerminalLines = null;
+            }
+            let displayContent = fullResponse;
+            // Append token usage badge
+            if (this._lastUsage) {
+              const u = this._lastUsage;
+              let usageStr = '';
+              // Anthropic format: input_tokens + output_tokens
+              if (u.input_tokens !== undefined) {
+                usageStr = `\n\n— Tokens: ${u.input_tokens}→${u.output_tokens || '?'} (in→out)`;
+              }
+              // OpenAI format: prompt_tokens + completion_tokens + total_tokens
+              if (u.total_tokens !== undefined) {
+                usageStr = `\n\n— Tokens: ${u.total_tokens} total (${u.prompt_tokens || '?'}→${u.completion_tokens || '?'})`;
+              }
+              if (usageStr) {
+                displayContent += usageStr;
+              }
+              this._lastUsage = null;
+            }
+            const aiMsg = { role: 'assistant', content: displayContent };
+            this.messages.push(aiMsg);
+            this.appendToDOM(aiMsg);
+            this._saveHistory();
+            this.scrollToBottom();
+            this._endSending();
+
+            // ── 语音输出：AI 回复后自动朗读 ──
+            if (window.QCLI?.VoiceOutput?.speakAIResponse) {
+              window.QCLI.VoiceOutput.speakAIResponse(fullResponse);
+            }
+
+            if (this.input) this.input.focus();
+          },
+          onError: (err) => {
+            this.removeThinking();
+
+            // Structured error from chat-api.js
+            if (typeof err === 'object' && err !== null && err.type) {
+              const friendlyMessages = {
+                'timeout': '⏱️ ' + (Q.__?.('chat.timeout') || '响应超时，服务器长时间无数据返回，请重试'),
+                'stream_error': '🔌 ' + (Q.__?.('chat.streamError') || '流式响应异常，连接中断'),
+              };
+              const toastMsg = friendlyMessages[err.type] || '⚠️ ' + (err.message || '未知错误');
+              if (Q.showToast) Q.showToast(toastMsg, err.type === 'timeout' ? 'info' : 'error');
+
+              // Also show error in the chat area as a visible message
+              const errorMsg = { role: 'assistant', content: '❌ ' + toastMsg };
+              this.messages.push(errorMsg);
+              this.appendToDOM(errorMsg);
+              this._saveHistory();
+              this.scrollToBottom();
+            } else if (err === 'NEEDS_KEY') {
+              if (Q.showUploadStatus) Q.showUploadStatus(Q.__?.('ai.needsKey') || 'Please configure AI key in settings', 'info');
+            } else {
+              // Legacy string error — show as Toast + visible message
+              const toastMsg = '⚠️ ' + (Q.__?.('chat.error') || '请求出错') + ': ' + err;
+              if (Q.showUploadStatus) Q.showUploadStatus(toastMsg, 'error');
+              const errorMsg = { role: 'assistant', content: '❌ ' + toastMsg };
+              this.messages.push(errorMsg);
+              this.appendToDOM(errorMsg);
+              this._saveHistory();
+              this.scrollToBottom();
+            }
+
+            // Note: snapshot NOT updated on error — so retry will re-send terminal context
+            this._pendingTerminalLines = null;
+            this._endSending();
+            if (this.input) this.input.focus();
+          },
+        });
+      });
+    } else {
+      this._mockResponse();
+    }
+  }
+
+  _mockResponse() {
+    const Q = qcli();
+    this.removeThinking();
+    const mockResponses = [
+      Q.__?.('chat.response1') || 'Hello! How can I help you today?',
+      Q.__?.('chat.response2') || 'That\'s an interesting question. Let me think about that...',
+      Q.__?.('chat.response3') || 'I can help you with that CLI task.',
+      Q.__?.('chat.response4') || 'Here\'s what I found...',
+    ];
+    const aiMsg = {
+      role: 'assistant',
+      content: mockResponses[Math.floor(Math.random() * mockResponses.length)],
+    };
+    this.messages.push(aiMsg);
+    this.appendToDOM(aiMsg);
+    this._saveHistory();
+    this.scrollToBottom();
+    this._endSending();
+    if (this.input) this.input.focus();
+    if (Q.showUploadStatus) Q.showUploadStatus(Q.__?.('ai.needsKey') || 'Configure AI key in settings', 'info');
+  }
+
+  _endSending() {
+    this.sending = false;
+    this._abortController = null;
+    if (this.sendBtn) {
+      this.sendBtn.textContent = '➤';
+      this.sendBtn.classList.remove('stop-btn');
+      this.sendBtn.title = '发送';
+      this.sendBtn.disabled = false;
+    }
+    const Q = qcli();
+    if (Q.chatStore) Q.chatStore.setState({ sending: false });
+  }
+
+  // ── Public: Stop generation ──
+
+  stopGeneration() {
+    if (this._abortController) {
+      this._abortController.abort();
+      this._abortController = null;
+    }
+    this.removeThinking();
+    this._endSending();
+    if (this.input) this.input.focus();
+  }
+
+  // ── Public: Clear history ──
+
+  clearHistory() {
+    const Q = qcli();
+    if (!confirm(Q.__?.('chat.clearConfirm') || 'Clear all messages?')) return;
+
+    this.messages = [];
+    if (this.msgsEl) {
+      this.msgsEl.innerHTML = `
+        <div class="chat-message welcome-msg">
+          <div class="msg-avatar ai-avatar">🤖</div>
+          <div class="msg-content">
+            <div class="msg-sender">${Q.__?.('chat.sender.ai') || 'AI Assistant'}</div>
+            <div class="msg-bubble ai-bubble">${Q.__?.('chat.welcome') || 'Hello! I\'m your AI assistant. How can I help you?'}</div>
+          </div>
+        </div>
+      `;
+    }
+    this._saveHistory();
+  }
+
+  // ── Public: Export chat ──
+
+  exportChat() {
+    if (this.messages.length === 0) return;
+    const lines = [];
+    for (const m of this.messages) {
+      const role = m.role === 'user' ? 'You' : 'AI';
+      lines.push(`**${role}:**`);
+      lines.push('');
+      lines.push(m.content);
+      lines.push('');
+      lines.push('---');
+      lines.push('');
+    }
+    const md = lines.join('\n');
+    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `chat-export-${new Date().toISOString().slice(0,10)}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  // ── Public: Rendering ──
+
+  renderAll() {
+    if (!this.msgsEl) return;
+    this.msgsEl.innerHTML = '';
+    for (const msg of this.messages) {
+      this.appendToDOM(msg, false);
+    }
+    this.scrollToBottom();
+  }
+
+  // ── AI 讨论模式：把每一轮发言渲染成独立、带标签的气泡 ──
+  _handleDiscussEvent(evt) {
+    if (!this.msgsEl) return;
+    if (evt.type === 'start') {
+      // 新发言方开始：移除思考指示器，开一个带标签的新气泡
+      this.removeThinking();
+      const Q = qcli();
+      const div = document.createElement('div');
+      div.className = 'chat-message discuss-message discuss-' + (evt.speaker || 'ai');
+      const avatar = document.createElement('div');
+      avatar.className = 'msg-avatar discuss-avatar ' + (evt.speaker === 'cli' ? 'cli-avatar' : evt.speaker === 'summary' ? 'summary-avatar' : 'ai-avatar');
+      avatar.textContent = evt.speaker === 'cli' ? '🟩' : evt.speaker === 'summary' ? '📋' : '🟦';
+      div.appendChild(avatar);
+      const content = document.createElement('div');
+      content.className = 'msg-content';
+      const sender = document.createElement('div');
+      sender.className = 'msg-sender discuss-sender';
+      const roundTxt = evt.round ? ` · 第 ${evt.round} 轮` : '';
+      sender.textContent = (evt.label || 'AI 助手') + roundTxt;
+      content.appendChild(sender);
+      const bubble = document.createElement('div');
+      bubble.className = 'msg-bubble discuss-bubble';
+      content.appendChild(bubble);
+      div.appendChild(content);
+      this.msgsEl.appendChild(div);
+      this._discussActive = true;
+      this._activeDiscussBubble = bubble;
+      this._discussText = '';
+      this._discussPendingMsg = { role: evt.speaker === 'cli' ? 'tool' : 'assistant', content: '', _speaker: evt.speaker, _label: evt.label };
+      this.scrollToBottom();
+    } else if (evt.type === 'end') {
+      // 发言结束：把气泡最终内容落盘到消息历史
+      if (this._activeDiscussBubble) {
+        this._activeDiscussBubble.innerHTML = renderMarkdown(this._discussText || '（无内容）');
+        requestAnimationFrame(() => { if (window.QCLI?.MermaidRenderer) window.QCLI.MermaidRenderer.renderAll(); });
+      }
+      if (this._discussPendingMsg) {
+        this._discussPendingMsg.content = this._discussText || '（无内容）';
+        this.messages.push(this._discussPendingMsg);
+      }
+      this._discussActive = false;
+      this._activeDiscussBubble = null;
+      this._discussText = '';
+      this._discussPendingMsg = null;
+      this._saveHistory();
+      this.scrollToBottom();
+    } else if (evt.type === 'stats') {
+      // 讨论结束后的 token 消耗报告（圆桌 vs 单模型 成本可见）
+      const s = evt.stats || {};
+      const agents = s.agents || 0;
+      const rounds = s.rounds || 0;
+      const cliEst = s.cliEstTokens || 0;
+      const cliChars = s.cliOutputChars || 0;
+      const div = document.createElement('div');
+      div.className = 'chat-message discuss-message discuss-stats';
+      const bubble = document.createElement('div');
+      bubble.className = 'msg-bubble discuss-stats-bubble';
+      bubble.innerHTML = `<div class="discuss-stats-title">💱 本次讨论 token 消耗</div>`
+        + `<div class="discuss-stats-row">AI 助手 / 汇总（API 精确）：输入 <b>${s.aiInputTokens || 0}</b> · 输出 <b>${s.aiOutputTokens || 0}</b></div>`
+        + `<div class="discuss-stats-row">CLI Agent（${agents} 个 · ${rounds} 轮）：估算输出 ≈ <b>${cliEst}</b> token（${cliChars} 字符，其内部消耗未计入）</div>`
+        + `<div class="discuss-stats-hint">提示：多 Agent 圆桌会随「Agent 数 × 轮数」近似超线性放大 token，质量提升并非免费。</div>`;
+      div.appendChild(bubble);
+      this.msgsEl.appendChild(div);
+      this._saveHistory();
+      this.scrollToBottom();
+    }
+  }
+
+  appendToDOM(msg, animate = true) {
+    if (!this.msgsEl) return;
+    const Q = qcli();
+    const div = document.createElement('div');
+    div.className = 'chat-message' + (msg.role === 'user' ? ' user-message' : '');
+    if (!animate) div.style.animation = 'none';
+
+    const avatar = document.createElement('div');
+    avatar.className = 'msg-avatar' + (msg.role === 'assistant' ? ' ai-avatar' : '');
+    avatar.textContent = msg.role === 'user' ? '\ud83d\udc64' : '\ud83e\udd16';
+    div.appendChild(avatar);
+
+    const content = document.createElement('div');
+    content.className = 'msg-content';
+
+    const sender = document.createElement('div');
+    sender.className = 'msg-sender';
+    sender.textContent = msg.role === 'user' ? (Q.__?.('chat.sender.you') || 'You') : (Q.__?.('chat.sender.ai') || 'AI');
+    content.appendChild(sender);
+
+    const bubble = document.createElement('div');
+    bubble.className = 'msg-bubble ' + (msg.role === 'user' ? 'user-bubble' : 'ai-bubble');
+    if (msg.role === 'assistant') {
+      bubble.innerHTML = renderMarkdown(msg.content);
+      // 渲染 Mermaid 流程图
+      requestAnimationFrame(() => {
+        if (window.QCLI?.MermaidRenderer) {
+          window.QCLI.MermaidRenderer.renderAll();
+        }
+      });
+      // Append tool call trace if any
+      if (this._activeToolCalls.length > 0) {
+        const trace = document.createElement('details');
+        trace.className = 'tool-call-trace';
+        trace.style.cssText = 'margin-top:8px;font-size:12px;color:#888;';
+        const summary = document.createElement('summary');
+        summary.textContent = `🔧 工具调用 (${this._activeToolCalls.length})`;
+        trace.appendChild(summary);
+        const list = document.createElement('div');
+        list.style.cssText = 'margin-top:4px;';
+        for (const tc of this._activeToolCalls) {
+          const row = document.createElement('div');
+          row.style.cssText = 'padding:2px 0;';
+          const icon = tc.status === 'done' ? '✅' : '⏳';
+          const dur = tc.durMs > 0 ? ` (${tc.durMs}ms)` : '';
+          row.textContent = `${icon} ${tc.name}${dur}`;
+          list.appendChild(row);
+        }
+        trace.appendChild(list);
+        bubble.appendChild(trace);
+      }
+    } else {
+      bubble.textContent = msg.content;
+    }
+    content.appendChild(bubble);
+
+    div.appendChild(content);
+    this.msgsEl.appendChild(div);
+  }
+
+  scrollToBottom() {
+    requestAnimationFrame(() => {
+      if (this.msgsEl) this.msgsEl.scrollTop = this.msgsEl.scrollHeight;
+    });
+  }
+
+  showThinking() {
+    if (!this.msgsEl) return;
+    const Q = window.QCLI || {};
+    const div = document.createElement('div');
+    div.className = 'chat-message';
+    div.id = 'thinking-indicator';
+
+    const avatar = document.createElement('div');
+    avatar.className = 'msg-avatar ai-avatar';
+    avatar.textContent = '\ud83e\udd16';
+    div.appendChild(avatar);
+
+    const content = document.createElement('div');
+    content.className = 'msg-content';
+
+    const sender = document.createElement('div');
+    sender.className = 'msg-sender';
+    sender.textContent = Q.__?.('chat.sender.ai') || 'AI';
+    content.appendChild(sender);
+
+    // Thoughtful thinking indicator: animated dots + optional status text
+    const bubble = document.createElement('div');
+    bubble.className = 'msg-bubble thinking';
+    
+    // Animated dots container
+    const dotsContainer = document.createElement('span');
+    dotsContainer.className = 'thinking-dots';
+    for (let i = 0; i < 3; i++) {
+      const dot = document.createElement('span');
+      dot.className = 'thinking-dot';
+      dotsContainer.appendChild(dot);
+    }
+    bubble.appendChild(dotsContainer);
+
+    // Status text line (hidden initially, shown for tool calls etc.)
+    const statusEl = document.createElement('span');
+    statusEl.className = 'thinking-status';
+    statusEl.textContent = '';
+    bubble.appendChild(statusEl);
+
+    content.appendChild(bubble);
+    div.appendChild(content);
+    this.msgsEl.appendChild(div);
+
+    // 刷新任何在 thinking-indicator 创建前到达的缓冲 Agent 事件
+    // 顺序执行微任务让 DOM 先完成渲染，再播放缓冲事件
+    Promise.resolve().then(() => {
+      if (this._agentRenderer) this._agentRenderer.flushAgentBuffer();
+    });
+  }
+
+  removeThinking() {
+    const el = document.getElementById('thinking-indicator');
+    if (el) el.remove();
+    // 清理 Agent 实时会话状态（已重构为由 AgentSessionRenderer 托管）
+    if (this._agentRenderer && typeof this._agentRenderer.clear === 'function') {
+      this._agentRenderer.clear();
+    }
+  }
+
+
+}
+
+customElements.define('chat-panel', ChatPanel);
+
+export default ChatPanel;

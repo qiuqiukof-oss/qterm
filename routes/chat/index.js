@@ -1,0 +1,501 @@
+// @ts-check
+// ============================================================
+// Chat Route — Entry Point (extracted from routes/chat.js)
+//
+// Orchestrates the AI chat functionality:
+// - POST /api/chat — SSE streaming chat with OpenAI/Anthropic
+// - GET /api/chat/status — Check AI configuration status
+// - POST /api/chat/tools — Non-streaming tool execution
+//
+// Sub-modules:
+//   utils.js            — Shared helpers (URL, token, error)
+//   tools.js            — Tool registry + execution engine
+//   stream-openai.js    — OpenAI SSE streaming
+//   stream-anthropic.js — Anthropic SSE streaming
+// ============================================================
+
+const express = require('express');
+const { trimHistory, safeApiError, buildApiUrl } = require('./utils');
+const { QCLI_TOOLS, executeToolCall } = require('./tools');
+const { pruneToolContext } = require('./token-budget');
+const { streamOpenAIWithTools } = require('./stream-openai');
+const { streamAnthropicWithTools, parseAnthropicStream, buildAnthropicConversation } = require('./stream-anthropic');
+const { runDiscussion } = require('./discuss');
+
+// ============================================================
+// Non-streaming chat with tool support (for MCP ai_chat)
+// ============================================================
+
+// Timeout constants (ms)
+const AI_API_FETCH_TIMEOUT = 180_000;  // 单轮 API 调用超时 3 分钟（P3-2，原 120s 偏紧）
+const NON_STREAMING_CHAIN_TIMEOUT = 180_000; // 3 min total tool chain
+
+// 生成每请求隔离标识（限流桶归属，P2-3）
+function _newRequestId() {
+  return 'chat-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+}
+
+/**
+ * Execute a non-streaming chat with tool support.
+ * Dispatches to OpenAI or Anthropic based on provider.
+ *
+ * @param {object[]} messages - Chat messages
+ * @param {string} apiKey - API key
+ * @param {string} [model] - Model name
+ * @param {string} provider - 'openai' or 'anthropic'
+ * @param {string} [baseUrl] - Custom API base URL
+ * @param {Function} [broadcastFn] - WebSocket broadcast for metrics
+ * @returns {Promise<{content: string, toolCalls: number, usage: object|null, timedout?: boolean}>}
+ */
+async function nonStreamingChat(messages, apiKey, model, provider, baseUrl, broadcastFn) {
+  const deadline = Date.now() + NON_STREAMING_CHAIN_TIMEOUT;
+  if (provider === 'anthropic') {
+    return nonStreamingAnthropic(messages, apiKey, model, baseUrl, broadcastFn, deadline);
+  }
+  return nonStreamingOpenAI(messages, apiKey, model, baseUrl, broadcastFn, deadline);
+}
+
+async function nonStreamingOpenAI(messages, apiKey, model, baseUrl, broadcastFn, deadline) {
+  const modelName = model || 'gpt-4o-mini';
+  const url = buildApiUrl(baseUrl, 'https://api.openai.com/v1', '/chat/completions');
+  const requestId = _newRequestId();
+
+  let currentMessages = [...messages];
+  let toolCallCount = 0;
+  const maxToolRounds = 10;
+
+  while (toolCallCount < maxToolRounds) {
+    // ── Total chain timeout check ──
+    if (Date.now() > deadline) {
+      return {
+        content: '工具调用总超时（3 分钟），已返回部分结果',
+        toolCalls: toolCallCount,
+        usage: null,
+        timedout: true,
+      };
+    }
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: modelName,
+        messages: currentMessages,
+        tools: QCLI_TOOLS,
+        tool_choice: 'auto',
+        max_tokens: 16384,
+      }),
+      signal: AbortSignal.timeout(AI_API_FETCH_TIMEOUT),
+    });
+
+    if (!response.ok) {
+      const errBody = await response.text();
+      throw new Error(safeApiError(response, errBody, 'OpenAI API'));
+    }
+
+    const data = await response.json();
+    const choice = data.choices?.[0];
+    if (!choice) throw new Error('No response from OpenAI');
+
+    const msg = choice.message;
+    currentMessages.push(msg);
+
+    if (msg.tool_calls && msg.tool_calls.length > 0) {
+      toolCallCount++;
+      for (const toolCall of msg.tool_calls) {
+        let args = {};
+        try {
+          args = JSON.parse(toolCall.function.arguments);
+        } catch { /* use empty args */ }
+
+        const result = await executeToolCall(toolCall.function.name, args, broadcastFn, requestId);
+        currentMessages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: result,
+        });
+      }
+      // 跨轮工具结果压缩：合并重复 agent_poll 增量，压低 token（不影响功能）
+      currentMessages = pruneToolContext(currentMessages);
+    } else {
+      return {
+        content: msg.content || '',
+        toolCalls: toolCallCount,
+        usage: data.usage || null,
+      };
+    }
+  }
+
+  return {
+    content: 'Maximum tool call rounds reached.',
+    toolCalls: toolCallCount,
+    usage: null,
+  };
+}
+
+async function nonStreamingAnthropic(messages, apiKey, model, baseUrl, broadcastFn, deadline) {
+  const modelName = model || 'claude-sonnet-4-20250514';
+  const requestId = _newRequestId();
+
+  const anthropicTools = QCLI_TOOLS.map(t => ({
+    name: t.function.name,
+    description: t.function.description,
+    input_schema: t.function.parameters || { type: 'object', properties: {} },
+  }));
+
+  let currentMessages = [...messages];
+  let toolCallCount = 0;
+  const maxToolRounds = 10;
+
+  while (toolCallCount < maxToolRounds) {
+    // ── Total chain timeout check ──
+    if (Date.now() > deadline) {
+      return {
+        content: '工具调用总超时（3 分钟），已返回部分结果',
+        toolCalls: toolCallCount,
+        usage: null,
+        timedout: true,
+      };
+    }
+
+    const systemMsg = currentMessages.find(m => m.role === 'system');
+    const conversation = buildAnthropicConversation(currentMessages);
+
+    const url = buildApiUrl(baseUrl, 'https://api.anthropic.com/v1', '/messages');
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: modelName,
+        messages: conversation,
+        system: systemMsg?.content || undefined,
+        max_tokens: 16384,
+        tools: anthropicTools,
+      }),
+      signal: AbortSignal.timeout(AI_API_FETCH_TIMEOUT),
+    });
+
+    if (!response.ok) {
+      const errBody = await response.text();
+      throw new Error(safeApiError(response, errBody, 'Anthropic API'));
+    }
+
+    const data = await response.json();
+    const contentBlocks = data.content || [];
+    const textParts = [];
+    const toolCalls = [];
+
+    for (const block of contentBlocks) {
+      if (block.type === 'text') {
+        textParts.push(block.text);
+      } else if (block.type === 'tool_use') {
+        toolCalls.push({
+          id: block.id,
+          name: block.name,
+          input: block.input || {},
+        });
+      }
+    }
+
+    const text = textParts.join('');
+    const assistantBlocks = [];
+    if (text) assistantBlocks.push({ type: 'text', text });
+    for (const tc of toolCalls) {
+      assistantBlocks.push({ type: 'tool_use', id: tc.id, name: tc.name, input: tc.input });
+    }
+
+    currentMessages.push({ role: 'assistant', content: assistantBlocks });
+
+    if (toolCalls.length === 0) {
+      return { content: text, toolCalls: toolCallCount, usage: data.usage || null };
+    }
+
+    toolCallCount++;
+    const toolResultBlocks = [];
+    for (const tc of toolCalls) {
+      let args = {};
+      try { args = tc.input || {}; } catch { /* use empty */ }
+      const result = await executeToolCall(tc.name, args, broadcastFn, requestId);
+      toolResultBlocks.push({
+        type: 'tool_result',
+        tool_use_id: tc.id,
+        content: result,
+      });
+    }
+
+    currentMessages.push({ role: 'user', content: toolResultBlocks });
+    // 跨轮工具结果压缩：合并重复 agent_poll 增量，压低 token（不影响功能）
+    currentMessages = pruneToolContext(currentMessages);
+  }
+
+  return {
+    content: 'Maximum tool call rounds reached.',
+    toolCalls: toolCallCount,
+  };
+}
+
+// ============================================================
+// Express Router
+// ============================================================
+
+/**
+ * Create an Express router for AI chat.
+ * @param {{ broadcastFn?: Function }} [opts]
+ * @returns {express.Router}
+ */
+function createRouter(opts = {}) {
+  const { broadcastFn } = opts;
+  const router = express.Router();
+
+  // ──────────────────────────────────────────────
+  // POST /api/chat — Send a message to the AI
+  // Body: { messages, model?, apiKey?, provider?, baseUrl?, disableTools? }
+  // Response: SSE stream of tokens
+  // ──────────────────────────────────────────────
+  router.post('/chat', async (req, res) => {
+    const { messages, model, apiKey: clientKey, provider: clientProvider, baseUrl: clientBaseUrl, disableTools, terminalContext, terminalContextChanged, discuss, partner, partners, maxTurns } = req.body;
+
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ error: 'messages array is required' });
+    }
+
+    // ── AI 讨论模式：AI 助手 ↔ 一个或多个 CLI Agent 按回合交替（圆桌），过程以 SSE 实时可见 ──
+    if (discuss) {
+      const userText = (messages[messages.length - 1]?.content || '').toString();
+      // 多选兼容单选：partners（数组）优先，回退到单 partner
+      const partnerList = Array.isArray(partners) && partners.length
+        ? partners.slice()
+        : (partner ? [partner] : []);
+      if (partnerList.length === 0) {
+        return res.status(400).json({ error: '讨论模式需要至少指定一个 CLI Agent（partners）' });
+      }
+      try {
+        await runDiscussion(res, {
+          message: userText,
+          partner: partnerList[0],   // 兼容旧字段
+          partners: partnerList,
+          maxTurns: Math.min(Math.max(parseInt(maxTurns, 10) || 6, 1), 12),
+          apiKey: clientKey,
+          provider: clientProvider,
+          baseUrl: clientBaseUrl,
+          model,
+        });
+      } catch (err) {
+        if (!res.headersSent) {
+          res.status(500).json({ error: err.message });
+        }
+      }
+      return;
+    }
+
+    // Inject terminal context as a system message
+    let contextMessages = messages;
+    if (terminalContext && terminalContext.trim()) {
+      const last100 = terminalContext.split('\n').slice(-100).join('\n');
+      const statusLabel = terminalContextChanged
+        ? '[当前终端输出 - 已更新]'
+        : '[当前终端输出 - 未变化]';
+      contextMessages = [
+        { role: 'system', content: `${statusLabel} - 仅供上下文参考，请根据此内容回答用户问题\n\`\`\`\n${last100}\n\`\`\`` },
+        ...messages,
+      ];
+    }
+
+    // Self-Awareness System Prompt
+    const SELF_AWARE_PROMPT = `You are the AI assistant built into Hesi v${require('../../package.json').version}.
+
+## Self-Awareness
+You are running inside a browser-based terminal hub. Your frontend (HTML/JS) is served by a Node.js server (Express) and rendered in the user's browser. You have tools that let you interact with the browser you're running in via CDP (Chrome DevTools Protocol).
+
+## Self-Evolution Capabilities
+You can read, modify, and rebuild your own source code:
+
+1. **Read your own code** → use \`read_file\` (paths relative to project root)
+2. **Modify your own code** → use \`write_file\` to edit any file
+3. **Rebuild the frontend** → use \`rebuild_frontend\` (runs npm run build + refreshes browser)
+4. **Execute shell commands** → use \`exec_terminal\` for npm scripts, git, etc.
+5. **Inspect/modify your running page** → use \`browser_evaluate\` to run JS in your own page
+6. **See your own UI** → use \`browser_screenshot\` to visually check your appearance
+7. **Understand your architecture** → use \`get_self_info\` for a detailed project overview
+
+The self-evolution cycle: \`read_file → write_file → rebuild_frontend → browser_screenshot\`
+
+## Browser Control (CDP)
+If the browser was started with --remote-debugging-port=9222, use \`browser_connect\` to connect. Then you can navigate, click, type, take screenshots, execute JavaScript, switch tabs, and inspect console logs. You can even see and interact with your own Hesi page.
+
+Before starting browser operations, call \`browser_info\` to get the full browser state — open tabs, platform details, and performance metrics. Use \`browser_list_tabs\` to see all open pages and \`browser_console\` to check for errors.
+
+## Browser Scripts (User Script System)
+You can also manage user scripts that auto-run on matching web pages:
+- Scripts are stored on the server and injected via CDP when the browser connects
+- Each script has a URL pattern (glob) and runs automatically on matched pages
+- Use the browser-scripts panel in the right sidebar (📜 tab) to manage scripts
+
+## Key File Locations
+- Server: \`server.js\`
+- AI Chat: \`routes/chat/index.js\` (this file — you can modify your own tools here)
+- Browser Control: \`routes/browser.js\`, \`mcp/tools/browser.js\`
+- MCP Bridge: \`mcp/bridge.js\`
+- Frontend: \`public/chat-ui.js\`, \`public/components/chat-panel.js\`
+- Build: \`npm run build\` (uses esbuild)`;
+
+    contextMessages = [
+      { role: 'system', content: SELF_AWARE_PROMPT },
+      ...contextMessages,
+    ];
+
+    // Determine provider and API key
+    const provider = clientProvider ||
+      (process.env.ANTHROPIC_API_KEY ? 'anthropic' : 'openai');
+
+    const apiKey = clientKey ||
+      process.env.OPENAI_API_KEY ||
+      process.env.ANTHROPIC_API_KEY ||
+      '';
+
+    if (!apiKey) {
+      if (clientBaseUrl) {
+        const tools = disableTools ? undefined : QCLI_TOOLS;
+        try {
+          await streamOpenAIWithTools(res, messages, '', model || 'local-model', clientBaseUrl, tools, broadcastFn);
+          return;
+        } catch (_) { /* fall through */ }
+      }
+
+      const lmStudioBase = 'http://127.0.0.1:1234';
+      try {
+        const healthResp = await fetch(`${lmStudioBase}/v1/models`, { signal: AbortSignal.timeout(2000) });
+        if (healthResp.ok) {
+          const tools = disableTools ? undefined : QCLI_TOOLS;
+          await streamOpenAIWithTools(res, messages, '', model || 'local-model', lmStudioBase, tools, broadcastFn);
+          return;
+        }
+      } catch (_) { /* LM Studio not available */ }
+      return res.status(400).json({
+        error: 'No API key configured. Set OPENAI_API_KEY or ANTHROPIC_API_KEY in environment, '
+          + 'or provide one in the request, or start LM Studio (localhost:1234).',
+        needsKey: true,
+      });
+    }
+
+    // Set up SSE headers
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    // 关闭本响应的 socket 空闲超时：长工具/Agent 委派期间 SSE 可能数分钟无数据，
+    // 交由 keepalive 心跳保活，避免被 120s 默认超时误杀（前端表现为“调用工具被断开”）。
+    res.setTimeout(0);
+
+    // 将 Agent 实时输出（agent_* 事件）同步转发到本 SSE 流，
+    // 让前端在工具执行期间看到进度，减少“卡住/断开”的错觉；同时保留原 WS 广播。
+    const sseBroadcast = (payload) => {
+      try {
+        if (payload && payload.type === 'mcp_metric' &&
+            typeof payload.data?.ev === 'string' && payload.data.ev.startsWith('agent_')) {
+          res.write(`data: ${JSON.stringify({ type: 'tool_live', payload: payload.data })}\n\n`);
+        }
+      } catch { /* ignore */ }
+      if (typeof broadcastFn === 'function') broadcastFn(payload);
+    };
+
+    try {
+      const tools = disableTools ? undefined : QCLI_TOOLS;
+      if (provider === 'anthropic') {
+        await streamAnthropicWithTools(res, contextMessages, apiKey, model, clientBaseUrl, tools, sseBroadcast, req);
+      } else {
+        await streamOpenAIWithTools(res, contextMessages, apiKey, model, clientBaseUrl, tools, sseBroadcast, req);
+      }
+    } catch (err) {
+      if (res.headersSent) {
+        res.write(`data: ${JSON.stringify({ type: 'error', message: err.message })}\n\n`);
+        res.write('data: [DONE]\n\n');
+        res.end();
+      } else {
+        res.status(500).json({ error: err.message });
+      }
+    }
+  });
+
+  // ──────────────────────────────────────────────
+  // GET /api/chat/status — Check if AI is configured
+  // ──────────────────────────────────────────────
+  router.get('/chat/status', (req, res) => {
+    const hasOpenAI = !!process.env.OPENAI_API_KEY;
+    const hasAnthropic = !!process.env.ANTHROPIC_API_KEY;
+    res.json({
+      configured: hasOpenAI || hasAnthropic,
+      providers: {
+        openai: hasOpenAI,
+        anthropic: hasAnthropic,
+      },
+    });
+  });
+
+  // ──────────────────────────────────────────────
+  // POST /api/chat/tools — Non-streaming tool execution
+  // Used by MCP's ai_chat tool (avoids SSE parsing issues)
+  // ──────────────────────────────────────────────
+  router.post('/chat/tools', async (req, res) => {
+    const { messages, model, apiKey: clientKey, provider: clientProvider, baseUrl: clientBaseUrl } = req.body;
+
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ error: 'messages array is required' });
+    }
+
+    const provider = clientProvider ||
+      (process.env.ANTHROPIC_API_KEY ? 'anthropic' : 'openai');
+
+    const apiKey = clientKey ||
+      process.env.OPENAI_API_KEY ||
+      process.env.ANTHROPIC_API_KEY ||
+      '';
+
+    if (!apiKey) {
+      if (clientBaseUrl) {
+        try {
+          const result = await nonStreamingChat(messages, '', model || 'local-model', 'openai', clientBaseUrl, broadcastFn);
+          return res.json({ success: true, ...result });
+        } catch (_) { /* custom base URL failed */ }
+      }
+
+      const lmStudioBase = 'http://127.0.0.1:1234';
+      try {
+        const healthResp = await fetch(`${lmStudioBase}/v1/models`, { signal: AbortSignal.timeout(2000) });
+        if (healthResp.ok) {
+          const result = await nonStreamingChat(messages, '', model || 'local-model', 'openai', lmStudioBase, broadcastFn);
+          return res.json({ success: true, ...result });
+        }
+      } catch (_) { /* LM Studio not available */ }
+      return res.status(400).json({
+        error: 'No API key configured.',
+        needsKey: true,
+      });
+    }
+
+    try {
+      const result = await nonStreamingChat(messages, apiKey, model, provider, clientBaseUrl, broadcastFn);
+      res.json({ success: true, ...result });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  return router;
+}
+
+module.exports = {
+  createRouter,
+  // Exported for unit testing
+  streamAnthropicWithTools,
+  parseAnthropicStream,
+  buildAnthropicConversation,
+};

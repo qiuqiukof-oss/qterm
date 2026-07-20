@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mermaid 图表模板 — Hesi</title>
+  <link rel="stylesheet" href="/css/theme.css" />
+  <link rel="stylesheet" href="/css/standalone-nav.css" />
+  <!-- Mermaid templates CSS (extracted from right-panel.css) -->
+  <link rel="stylesheet" href="/css/right-panel.css" />
+  <style>
+    /* ── Standalone page overrides ── */
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg-ground, #0a0a0b);
+      color: var(--text-primary, #f5f5f7);
+    }
+    .mt-standalone {
+      display: flex;
+      flex-direction: column;
+      height: calc(100vh - 48px); /* minus nav height */
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 8px;
+      overflow: hidden;
+    }
+    .mt-standalone .mt-browser {
+      height: 100%;
+      background: var(--bg-overlay, rgba(255,255,255,0.02));
+      border: 1px solid var(--border-default, rgba(255,255,255,0.06));
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .mt-standalone .mt-header {
+      padding: 16px 20px 12px;
+    }
+    .mt-standalone .mt-title {
+      font-size: 16px;
+    }
+    .mt-standalone .mt-categories {
+      padding: 10px 14px;
+      gap: 6px;
+    }
+    .mt-standalone .mt-content {
+      padding: 14px;
+    }
+  </style>
+</head>
+<body class="sa-page" data-theme="dark">
+  <nav class="sa-nav">
+    <a class="sa-nav-back" href="/" onclick="event.preventDefault(); location.href='/';">&larr; 返回主应用</a>
+    <span class="sa-nav-title">📊 Mermaid 图表模板</span>
+    <span class="sa-nav-subtitle">浏览、复制、发送到聊天</span>
+    <span class="sa-nav-spacer"></span>
+    <span class="sa-nav-status">独立页面</span>
+  </nav>
+
+  <div class="mt-standalone" id="mt-standalone-container">
+    <div class="mt-browser" id="mt-browser-container">
+      <div class="mt-header">
+        <div class="mt-title">📊 Mermaid 图表模板</div>
+        <div class="mt-desc">点击预览，一键复制源码 · 可拖拽到聊天输入框</div>
+      </div>
+      <div class="mt-categories" id="mt-categories"></div>
+      <div class="mt-content" id="mt-content">
+        <div class="mt-placeholder">加载中...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Mermaid.js (needed for rendering) -->
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+
+  <!-- ⚡ Initialize QCLI namespace BEFORE plugin script runs (critical: plugin IIFE stores itself on window.QCLI) -->
+  <script>window.QCLI = window.QCLI || {};</script>
+
+  <!-- Plugin script (served from plugins directory) -->
+  <script src="/plugin-assets/mermaid-templates/ui/panel.js"></script>
+
+  <script>
+    // ── Render Mermaid Templates when the page loads ──
+    (function init() {
+      'use strict';
+
+      var container = document.getElementById('mt-browser-container');
+      if (!container) return;
+
+      // Set theme from localStorage
+      var savedTheme = localStorage.getItem('qcli-theme') || 'dark';
+      document.documentElement.setAttribute('data-theme', savedTheme);
+
+      // Ensure QCLI namespace exists
+      window.QCLI = window.QCLI || {};
+
+      // Inject any missing shared utilities needed by the plugin
+      if (!window.QCLI.showToast) {
+        window.QCLI.showToast = function(msg, type) {
+          var toast = document.getElementById('mt-toast');
+          if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'mt-toast';
+            toast.style.cssText =
+              'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);' +
+              'padding:8px 16px;border-radius:8px;font-size:13px;z-index:10000;' +
+              'background:var(--bg-elevated,#2c2c2e);border:1px solid var(--border-default,#38383a);' +
+              'color:var(--text-primary,#f5f5f7);box-shadow:0 4px 12px rgba(0,0,0,0.3);' +
+              'transition:opacity 0.2s;opacity:0;pointer-events:none;';
+            document.body.appendChild(toast);
+          }
+          var bgColor = type === 'success' ? '#22c55e' : type === 'error' ? '#ef4444' : type === 'warning' ? '#eab308' : 'transparent';
+          toast.style.borderColor = bgColor || 'var(--border-default,#38383a)';
+          toast.textContent = msg;
+          toast.style.opacity = '1';
+          clearTimeout(toast._hide);
+          toast._hide = setTimeout(function() { toast.style.opacity = '0'; }, 2500);
+        };
+      }
+
+      // Ensure UIRegistry exists (the plugin needs it to know it's in the right context)
+      if (!window.QCLI.UIRegistry) {
+        // Create a minimal mock that just allows getTabs() to work
+        window.QCLI.UIRegistry = {
+          _tabs: new Map(),
+          registerTab: function() { return false; },
+          getTabs: function() { return []; },
+          unregisterTab: function() {},
+          isTabRendered: function() { return false; },
+          markTabRendered: function() {},
+        };
+      }
+
+      // Ensure MermaidRenderer mock exists so plugin's renderAll() doesn't fail
+      if (!window.QCLI.MermaidRenderer) {
+        window.QCLI.MermaidRenderer = {
+          _initialized: false,
+          init: function() {
+            if (this._initialized) return;
+            if (!window.mermaid) {
+              var self = this;
+              setTimeout(function() { self.init(); }, 300);
+              return;
+            }
+            window.mermaid.initialize({
+              startOnLoad: false,
+              theme: savedTheme === 'dark' ? 'dark' : 'default',
+            });
+            this._initialized = true;
+            this.renderAll();
+          },
+          renderAll: function() {
+            this.init();
+            if (!this._initialized) return;
+            var els = document.querySelectorAll('.mermaid:not([data-rendered])');
+            els.forEach(function(el) {
+              if (!el.textContent.trim()) return;
+              el.setAttribute('data-rendered', 'processing');
+              try {
+                var id = 'mermaid-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
+                window.mermaid.render(id, el.textContent.trim()).then(function(result) {
+                  el.innerHTML = result.svg;
+                  el.setAttribute('data-rendered', 'done');
+                }).catch(function(err) {
+                  el.innerHTML = '<div style="color:#ef4444;font-size:11px;">⚠️ ' + err.message + '</div>';
+                  el.setAttribute('data-rendered', 'error');
+                });
+              } catch (e) {
+                el.innerHTML = '<div style="color:#ef4444;font-size:11px;">⚠️ ' + e.message + '</div>';
+                el.setAttribute('data-rendered', 'error');
+              }
+            });
+          },
+          setTheme: function() {},
+        };
+      }
+
+      // Ensure the chat input bridge works (plugin's "send to chat" button)
+      if (!document.getElementById('chat-input')) {
+        // Create a hidden chat-input for the plugin to find
+        var hiddenInput = document.createElement('textarea');
+        hiddenInput.id = 'chat-input';
+        hiddenInput.style.display = 'none';
+        document.body.appendChild(hiddenInput);
+      }
+
+      // Render the Mermaid Templates UI into our container
+      function doRender() {
+        if (window.QCLI && window.QCLI.MermaidTemplatesPlugin) {
+          window.QCLI.MermaidTemplatesPlugin.render(container);
+        } else {
+          // Plugin not loaded yet, retry
+          setTimeout(doRender, 200);
+        }
+      }
+
+      // Wait for plugin to load, then render
+      doRender();
+    })();
+  </script>
+</body>
+</html>
