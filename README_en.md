@@ -141,8 +141,9 @@
 
 > Full-screen TUI CLI agents (such as **opencode**) draw ASCII UI/status bars in the PTY. Their rendered frames are literal text — after stripping escape codes only fragments remain, which pollutes the discussion text fed to the AI (manifests as "stuck in UI rendering, no substantive analysis").
 
-- **Headless subcommand** — for agents that declare a headless mode, switch to `opencode run` and inject the task via a **stdin pipe** (non-TTY, eliminating the TUI at the source); output is clean plain text
-- **Extensible descriptor table** — the `HEADLESS` map in `lib/cli-headless.js` (currently includes `opencode`; aider/claude/codex etc. can be added after empirical testing)
+- **Headless subcommand** — for agents that declare a headless mode, use a non-interactive subcommand and inject the task through a **stdin pipe** (non-TTY, eliminating the TUI at the source); output is clean plain text
+- **Multi-CLI support** — the `HEADLESS` map in `lib/cli-headless.js` currently ships four built-in descriptors (all empirically tested, task prompts uniformly injected via stdin and **never concatenated into argv**): `opencode` (`opencode run`), `claude` (`claude -p`), `codex` (`codex exec -`), `aider` (`--yes-always --no-auto-commits --no-pretty --no-stream`); adding another CLI only needs one more descriptor entry
+- **Windows security note** — headless execution on Windows launches with `shell:true`, which re-tokenizes argv, so **multi-line / quote-containing prompts MUST be injected via stdin** (covered by the `test/cli-headless.test.js` regression using a malicious prompt containing `"`/newlines/`rm -rf`)
 - **Fallback compatibility** — agents without a declared headless mode still go through PTY + escape cleaning (`lib/terminal-clean.js`), behavior unchanged
 - **TUI preserved** — the human-interactive terminal (`ws/agent.js`) and workflows (`ws/orchestrator.js`) keep their full TUI, unaffected
 
@@ -294,7 +295,9 @@ Linux  : run ./tray.sh in a terminal
 │   ├── pty-policy.js      # PTY policy engine
 │   ├── message-dispatch.js # WebSocket message routing
 │   ├── agent.js           # Human-interactive agent terminal (preserves TUI)
-│   ├── orchestrator.js     # Workflow orchestration (preserves TUI)
+│   ├── orchestrator.js     # Workflow orchestration (preserves TUI, supports single-ws concurrent workflows)
+│   ├── digital-employee.js       # Digital-employee team (roles/personas/task dispatch)
+│   ├── digital-employee-worker.js # Digital-employee task executor (reuses agentPool, runs real tasks)
 │   └── context-store.js    # Shared context store
 ├── routes/                # RESTful API routes
 │   ├── chat/              # AI chat + discuss (AI × CLI Agent round-table)
@@ -302,7 +305,8 @@ Linux  : run ./tray.sh in a terminal
 │   ├── clis.js / agents.js # CLI / Agent discovery (with category, backing favorites sync)
 │   └── ...                # remaining routes
 ├── lib/
-│   ├── cli-headless.js     # Headless agent descriptor table (opencode run + stdin)
+│   ├── cli-headless.js     # Headless agent descriptor table (opencode/claude/codex/aider, all via stdin)
+│   ├── asset-hash.js       # Content hash for bundle.js/lazy-bundle.js (?v= cache-busting)
 │   ├── terminal-clean.js   # TUI escape cleaning (CSI/OSC/bare-ESC streaming clean)
 │   ├── env-filter.js       # PTY environment-variable filter
 │   ├── access-auth.js      # Optional access-token auth
