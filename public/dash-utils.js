@@ -2,17 +2,14 @@
 // Dashboard Utilities — Pure helper functions
 // ============================================================
 
+// escapeHtml lives in the canonical ./escape.js module; re-exported here
+// so existing `import { escapeHtml } from './dash-utils.js'` sites keep working.
+export { escapeHtml } from './escape.js';
+
 /** Set text content with null-safety */
 export function setText(id, value) {
   const el = document.getElementById(id);
   if (el) el.textContent = value;
-}
-
-/** Escape HTML entities */
-export function escapeHtml(str) {
-  const d = document.createElement('div');
-  d.textContent = str;
-  return d.innerHTML;
 }
 
 /** Sanitize an ID string for use as a DOM/CSS identifier */

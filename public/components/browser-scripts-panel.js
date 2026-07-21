@@ -8,6 +8,8 @@
 // @ts-check
 'use strict';
 
+import { escapeHtml } from '../escape.js';
+
 /** @typedef {import('../types').QCLI} QCLI */
 
 /** @returns {QCLI} */
@@ -402,20 +404,6 @@ function init(container) {
 
   // Load data
   refreshList();
-}
-
-// ============================================================
-// 工具函数
-// ============================================================
-
-function escapeHtml(str) {
-  if (!str) return '';
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
 }
 
 // ============================================================

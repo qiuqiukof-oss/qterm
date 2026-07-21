@@ -142,8 +142,9 @@
 
 > 全屏 TUI 的 CLI Agent（如 **opencode**）在 PTY 中会绘制 ASCII 界面/状态条，其渲染帧是字面文本，剥掉转义后只剩碎片，会污染喂给 AI 的讨论文本（表现为「陷入界面渲染，未提供实质分析」）。
 
-- **headless 子命令** — 对声明了 headless 模式的 Agent，改用 `opencode run` 并通过 **stdin 管道**注入任务（非 TTY，从源头杜绝 TUI），输出为干净纯文本
-- **可扩展描述表** — `lib/cli-headless.js` 的 `HEADLESS` 映射（当前含 `opencode`；aider/claude/codex 等可经实测后补充）
+- **headless 子命令** — 对声明了 headless 模式的 Agent，改用非交互子命令并通过 **stdin 管道**注入任务（非 TTY，从源头杜绝 TUI），输出为干净纯文本
+- **多 CLI 支持** — `lib/cli-headless.js` 的 `HEADLESS` 映射当前内置四种（均经实测、任务提示统一走 stdin，绝不拼进 argv）：`opencode`（`opencode run`）、`claude`（`claude -p`）、`codex`（`codex exec -`）、`aider`（`--yes-always --no-auto-commits --no-pretty --no-stream`）；新增其它 CLI 只需补一条描述
+- **Windows 安全要点** — headless 执行在 Windows 上以 `shell:true` 启动，argv 会被重新分词，因此**多行/含引号的提示词必须经 stdin 注入**（已由 `test/cli-headless.test.js` 用含 `"`/换行/`rm -rf` 的恶意提示回归覆盖）
 - **回退兼容** — 未声明 headless 的 Agent 仍走 PTY + 转义清洗（`lib/terminal-clean.js`），行为不变
 - **TUI 保留** — 人工交互终端（`ws/agent.js`）与工作流（`ws/orchestrator.js`）的 TUI 完整保留，不受影响
 
@@ -295,7 +296,9 @@ Linux  ：在终端运行 ./tray.sh
 │   ├── pty-policy.js      # PTY 策略引擎
 │   ├── message-dispatch.js # WebSocket 消息路由
 │   ├── agent.js           # 人工交互 Agent 终端（保留 TUI）
-│   ├── orchestrator.js     # 工作流编排（保留 TUI）
+│   ├── orchestrator.js     # 工作流编排（保留 TUI，支持单 ws 并发多 workflow）
+│   ├── digital-employee.js       # 数字员工团队（角色/人设/任务派发）
+│   ├── digital-employee-worker.js # 数字员工任务执行器（复用 agentPool，真实跑任务）
 │   └── context-store.js    # 共享上下文存储
 ├── routes/                # RESTful API 路由
 │   ├── chat/              # AI 聊天 + discuss（AI × CLI Agent 圆桌）
@@ -303,7 +306,8 @@ Linux  ：在终端运行 ./tray.sh
 │   ├── clis.js / agents.js # CLI / Agent 发现（含 category，支撑收藏夹同步）
 │   └── ...                # 其余路由
 ├── lib/
-│   ├── cli-headless.js     # headless Agent 描述表（opencode run + stdin）
+│   ├── cli-headless.js     # headless Agent 描述表（opencode/claude/codex/aider，均 stdin 注入）
+│   ├── asset-hash.js       # bundle.js/lazy-bundle.js 内容哈希（?v= 缓存击穿）
 │   ├── terminal-clean.js   # TUI 转义清洗（CSI/OSC/裸 ESC 流式清洗）
 │   ├── env-filter.js       # PTY 环境变量过滤
 │   ├── access-auth.js      # 可选访问令牌鉴权

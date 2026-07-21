@@ -9,6 +9,8 @@
 // ============================================================
 'use strict';
 
+import { escapeHtml } from './escape.js';
+
 /** @typedef {import('./types').QCLI} QCLI */
 
 /** @type {QCLI} */
@@ -29,12 +31,6 @@ const Q = /** @type {QCLI} */ (window.QCLI = window.QCLI || {});
 
   function stripAnsi(str) {
     return str.replace(/\x1b\[[0-9;]*m/g, '');
-  }
-
-  function escapeHtml(str) {
-    const d = document.createElement('div');
-    d.textContent = str;
-    return d.innerHTML;
   }
 
   // ── Sort pins ──

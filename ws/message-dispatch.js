@@ -337,12 +337,13 @@ function dispatchWSMessage(ctx, ws, msg) {
     }
 
     case 'workflow:addTask': {
-      const { task } = msg;
+      const { task, wfId } = msg;
       if (!task) {
         ws.send(JSON.stringify({ type: 'workflow:error', message: 'No task defined' }));
         break;
       }
-      const r = workflowEngine.addTask(ws, task);
+      // wfId optional: omitted → routes to the client's most-recent run.
+      const r = workflowEngine.addTask(ws, task, wfId);
       if (r && r.error) {
         ws.send(JSON.stringify({ type: 'workflow:error', message: r.error }));
       }
@@ -358,12 +359,13 @@ function dispatchWSMessage(ctx, ws, msg) {
     }
 
     case 'agent:msg': {
-      const { kind, msgId, from, to, payload } = msg;
+      const { kind, msgId, from, to, payload, wfId } = msg;
       if (!kind || !to) {
         ws.send(JSON.stringify({ type: 'agent:error', message: 'kind and to are required' }));
         break;
       }
-      workflowEngine.sendMessage(ws, { kind, msgId, from, to, payload });
+      // wfId optional: omitted → routes to the client's most-recent run.
+      workflowEngine.sendMessage(ws, { kind, msgId, from, to, payload, wfId });
       break;
     }
 

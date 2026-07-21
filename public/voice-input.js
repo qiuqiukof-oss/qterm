@@ -4,6 +4,8 @@
 // ============================================================
 'use strict';
 
+import { escapeHtml } from './escape.js';
+
 /** @typedef {import('./types').QCLI} QCLI */
 
 /** @type {QCLI} */
@@ -96,12 +98,6 @@ function initSpeechRecognition() {
   };
 
   return true;
-}
-
-export function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
 }
 
 function toggleVoiceInput() {

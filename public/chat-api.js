@@ -7,19 +7,36 @@
 
 /** @typedef {import('./types').QCLI} QCLI */
 
-import { safeStorage } from './lib/storage.js';
+import { safeStorage, safeSession } from './lib/storage.js';
+
+const AI_KEY = 'qcli-ai-key';
 
 export const ChatAPI = {
     // ── API Key Management ──
+    // The API key is a secret, so it lives in sessionStorage (per-tab, cleared
+    // when the tab/browser closes) rather than localStorage (persisted on disk
+    // indefinitely). A one-time migration lifts any pre-existing localStorage
+    // key into sessionStorage so existing users don't have to re-enter it.
 
-    /** Get stored API key from localStorage */
+    /** Get stored API key (sessionStorage, with legacy localStorage migration) */
     getApiKey() {
-      return safeStorage.get('qcli-ai-key', '');
+      const fromSession = safeSession.get(AI_KEY, '');
+      if (fromSession) return fromSession;
+      const legacy = safeStorage.get(AI_KEY, '');
+      if (legacy) {
+        // Migrate off persistent storage: copy to session, purge the disk copy.
+        safeSession.set(AI_KEY, legacy);
+        safeStorage.remove(AI_KEY);
+        return legacy;
+      }
+      return '';
     },
 
-    /** Store API key in localStorage */
+    /** Store API key in sessionStorage (never persisted to localStorage) */
     setApiKey(key) {
-      safeStorage.set('qcli-ai-key', key);
+      safeSession.set(AI_KEY, key);
+      // Ensure no stale persisted copy lingers from an older build.
+      safeStorage.remove(AI_KEY);
     },
 
     /** Get stored provider */

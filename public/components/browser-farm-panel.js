@@ -7,6 +7,8 @@
 // @ts-check
 'use strict';
 
+import { escapeHtml } from '../escape.js';
+
 /** @returns {QCLI} */
 function Q() { return window.QCLI || {}; }
 
@@ -183,11 +185,6 @@ function init(container) {
   container.querySelector('#bf-refresh-btn').addEventListener('click', refreshList);
 
   refreshList();
-}
-
-function escapeHtml(str) {
-  if (!str) return '';
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 function timeAgo(ts) {

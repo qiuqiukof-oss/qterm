@@ -7,6 +7,8 @@
 // @ts-check
 'use strict';
 
+import { escapeHtml } from '../escape.js';
+
 function Q() { return window.QCLI || {}; }
 
 let _a11yData = null;
@@ -138,11 +140,6 @@ function init(container) {
     dom.list.innerHTML = '<div class="a11y-empty"><div class="a11y-empty-icon">♿</div><p>运行可访问性分析</p></div>';
     updateScoreBar();
   });
-}
-
-function escapeHtml(str) {
-  if (str == null) return '';
-  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 // ── UIRegistry Registration ──

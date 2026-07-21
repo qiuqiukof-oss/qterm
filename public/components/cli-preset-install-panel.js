@@ -3,6 +3,8 @@
 // ============================================================
 'use strict';
 
+import { escapeHtml } from '../escape.js';
+
 (function registerCLIPresetInstall() {
   const Q = window.QCLI || {};
 
@@ -179,12 +181,6 @@
     }
 
     return html;
-  }
-
-  function escapeHtml(str) {
-    const d = document.createElement('div');
-    d.textContent = str;
-    return d.innerHTML;
   }
 
   // Register as right panel tab

@@ -261,7 +261,7 @@ function listDirRecursive(dirPath, maxDepth, currentDepth) {
           const stat = fs.statSync(fullPath);
           entry.size = stat.size;
           entry.ext = path.extname(item.name).toLowerCase();
-        } catch { console.debug('[Tools] stat entry:', e?.message); }
+        } catch (e) { console.debug('[Tools] stat entry:', e?.message); }
       }
 
       entries.push(entry);

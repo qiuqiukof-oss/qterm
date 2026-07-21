@@ -57,6 +57,8 @@ class AgentPoolManager {
    * @returns {Promise<string>} 会话信息 JSON（含 sessionId）
    */
   async start(agentId, task, context, broadcastFn) {
+    // 在 try 外声明，确保 catch 中清理逻辑可安全引用（早期错误时为 null）
+    let sessionId = null;
     try {
       // ── 容量检查 ──
       if (this._sessions.size >= MAX_POOL_SIZE) {
@@ -80,7 +82,7 @@ class AgentPoolManager {
       }
 
       // ── 创建 Session 占位（立即加入 map 防止并发竞态） ──
-      const sessionId = generateSessionId();
+      sessionId = generateSessionId();
       const outputChunks = [];
       let outputSize = 0;
 

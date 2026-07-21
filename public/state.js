@@ -9,6 +9,8 @@
 /** @type {QCLI} */
 const Q = /** @type {QCLI} */ (window.QCLI = window.QCLI || {});
 
+import { escapeHtml } from './escape.js';
+
 // ── Reactive store layer (Phase 1: state management decoupling) ──
 import { cliStore } from './stores/cliStore.js';
 import { uiStore } from './stores/uiStore.js';

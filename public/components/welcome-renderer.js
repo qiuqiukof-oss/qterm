@@ -8,15 +8,9 @@
 // @ts-check
 'use strict';
 
-/** @typedef {import('../types').QCLI} QCLI */
+import { escapeHtml } from '../escape.js';
 
-// ── Escape HTML helper ──
-/** @param {string} str @returns {string} */
-function escapeHtml(str) {
-  const d = document.createElement('div');
-  d.textContent = str;
-  return d.innerHTML;
-}
+/** @typedef {import('../types').QCLI} QCLI */
 
 // ── Pick localized text from a value that may be a string or {zh,en} ──
 /** @param {any} v @returns {string} */

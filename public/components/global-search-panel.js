@@ -8,6 +8,8 @@
 // @ts-check
 'use strict';
 
+import { escapeHtml } from '../escape.js';
+
 /** @typedef {import('../types').QCLI} QCLI */
 /** @typedef {{tabId:string, name?:string, cliId?:string, icon?:string, buffer?:string}} TabInfo */
 /** @typedef {{lineNum:number, text:string}} SearchMatch */
@@ -15,13 +17,6 @@
 
 /** @returns {QCLI} */
 function Q() { return /** @type {QCLI} */ (window.QCLI || {}); }
-
-/** @param {string} str @returns {string} */
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
-}
 
 // ============================================================
 // Open / Close / Toggle

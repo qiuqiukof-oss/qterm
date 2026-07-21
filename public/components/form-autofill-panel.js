@@ -7,6 +7,8 @@
 // @ts-check
 'use strict';
 
+import { escapeHtml } from '../escape.js';
+
 function Q() { return window.QCLI || {}; }
 
 let _formData = null;
@@ -192,11 +194,6 @@ function init(container) {
     dom.list.innerHTML = '<div class="af-empty"><div class="af-empty-icon">📝</div><p>检测页面上的表单字段</p></div>';
     if (dom.statusBar) dom.statusBar.innerHTML = '<span class="af-stat">点击「检测表单」开始</span>';
   });
-}
-
-function escapeHtml(str) {
-  if (str == null) return '';
-  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 // ── UIRegistry Registration ──

@@ -7,6 +7,8 @@
 // ============================================================
 'use strict';
 
+import { escapeHtml } from './escape.js';
+
 /** @typedef {import('./types').QCLI} QCLI */
 /** @type {QCLI} */
 const Q = /** @type {QCLI} */ (window.QCLI = window.QCLI || {});
@@ -83,11 +85,11 @@ function renderTeamPanel() {
           var statusDot = m.status === 'idle' ? '#22c55e' : (m.status === 'working' ? '#3b82f6' : (m.status === 'waiting_human' ? '#f59e0b' : '#ef4444'));
           var statusText = m.status === 'idle' ? '空闲' : (m.status === 'working' ? '工作中' : (m.status === 'waiting_human' ? '等待人工' : '错误'));
           return [
-            '<div class="de-member-item" data-id="', m.id, '" style="display:flex;align-items:center;padding:10px 12px;background:var(--bg-card);border-radius:8px;margin-bottom:6px;cursor:pointer;transition:all 0.15s;" onmouseover="this.style.background=\'var(--bg-hover)\'" onmouseout="this.style.background=\'var(--bg-card)\'">',
-            '<div style="width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;margin-right:10px;background:', m.color, '20;">', m.icon, '</div>',
+            '<div class="de-member-item" data-id="', escapeHtml(m.id), '" style="display:flex;align-items:center;padding:10px 12px;background:var(--bg-card);border-radius:8px;margin-bottom:6px;cursor:pointer;transition:all 0.15s;" onmouseover="this.style.background=\'var(--bg-hover)\'" onmouseout="this.style.background=\'var(--bg-card)\'">',
+            '<div style="width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;margin-right:10px;background:', escapeHtml(m.color), '20;">', escapeHtml(m.icon), '</div>',
             '<div style="flex:1;min-width:0;">',
-            '<div style="font-size:13px;font-weight:500;color:var(--text-primary);">', m.name, '</div>',
-            '<div style="font-size:11px;color:var(--text-tertiary);">', m.role, ' · ', m.agentId, '</div>',
+            '<div style="font-size:13px;font-weight:500;color:var(--text-primary);">', escapeHtml(m.name), '</div>',
+            '<div style="font-size:11px;color:var(--text-tertiary);">', escapeHtml(m.role), ' · ', escapeHtml(m.agentId), '</div>',
             '</div>',
             '<div style="display:flex;align-items:center;gap:4px;">',
             '<div style="width:8px;height:8px;border-radius:50%;background:', statusDot, ';"></div>',
@@ -142,7 +144,7 @@ function showRegisterModal() {
   var roles = DigitalEmployees.availableRoles;
   var roleOptions = roles.map(function(r) {
     var registered = r.registered ? ' (已注册)' : '';
-    return '<option value="' + r.role + '"' + (r.registered ? ' disabled' : '') + '>' + r.icon + ' ' + r.name + registered + '</option>';
+    return '<option value="' + escapeHtml(r.role) + '"' + (r.registered ? ' disabled' : '') + '>' + escapeHtml(r.icon) + ' ' + escapeHtml(r.name) + registered + '</option>';
   }).join('');
 
   overlay.innerHTML = [
@@ -218,10 +220,10 @@ function showMemberDetail(member) {
   overlay.innerHTML = [
     '<div style="background:var(--bg-primary);border-radius:12px;padding:24px;width:360px;max-width:90vw;box-shadow:0 20px 60px rgba(0,0,0,0.3);">',
     '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">',
-    '<div style="width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px;background:', member.color, '20;">', member.icon, '</div>',
+    '<div style="width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px;background:', escapeHtml(member.color), '20;">', escapeHtml(member.icon), '</div>',
     '<div>',
-    '<div style="font-size:16px;font-weight:600;color:var(--text-primary);">', member.name, '</div>',
-    '<div style="font-size:12px;color:var(--text-tertiary);">', member.role, ' · ', member.agentId, '</div>',
+    '<div style="font-size:16px;font-weight:600;color:var(--text-primary);">', escapeHtml(member.name), '</div>',
+    '<div style="font-size:12px;color:var(--text-tertiary);">', escapeHtml(member.role), ' · ', escapeHtml(member.agentId), '</div>',
     '</div></div>',
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;">',
     '<div style="background:var(--bg-card);padding:10px;border-radius:8px;text-align:center;">',
@@ -284,11 +286,11 @@ function showHumanInputDialog(msg) {
     '<span style="font-size:20px;">🙋</span>',
     '<div style="font-size:15px;font-weight:600;color:var(--text-primary);">人机协作请求</div>',
     '</div>',
-    '<div style="font-size:12px;color:var(--text-tertiary);margin-bottom:4px;">来自：', msg.employeeName || '工作流引擎', '</div>',
+    '<div style="font-size:12px;color:var(--text-tertiary);margin-bottom:4px;">来自：', escapeHtml(msg.employeeName || '工作流引擎'), '</div>',
     '<div style="background:var(--bg-card);padding:12px;border-radius:8px;margin-bottom:12px;font-size:13px;color:var(--text-primary);line-height:1.6;">',
-    msg.question || '请输入所需信息：',
+    escapeHtml(msg.question || '请输入所需信息：'),
     '</div>',
-    msg.workflowId ? '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:8px;">工作流: ' + msg.workflowId + ' · 步骤: ' + (msg.stepIndex !== undefined ? msg.stepIndex + 1 : '?') + '</div>' : '',
+    msg.workflowId ? '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:8px;">工作流: ' + escapeHtml(msg.workflowId) + ' · 步骤: ' + (msg.stepIndex !== undefined ? msg.stepIndex + 1 : '?') + '</div>' : '',
     '<textarea id="human-answer-input" placeholder="请输入回复..." style="width:100%;height:100px;padding:12px;border-radius:8px;border:1px solid var(--border-color);background:var(--bg-card);color:var(--text-primary);font-size:13px;resize:vertical;box-sizing:border-box;font-family:inherit;margin-bottom:12px;"></textarea>',
     '<div style="display:flex;gap:8px;justify-content:flex-end;">',
     '<button id="human-input-skip" style="padding:10px 20px;border-radius:8px;border:1px solid var(--border-color);background:transparent;color:var(--text-tertiary);cursor:pointer;font-size:13px;">跳过</button>',

@@ -19,6 +19,7 @@
 
 import { safeStorage } from '../lib/storage.js';
 import AgentSessionRenderer from './agent-session-renderer.js';
+import { escapeHtml } from '../escape.js';
 
 /** @typedef {import('../types').QCLI} QCLI */
 /** @typedef {{role:string, content:string}} ChatMessage */
@@ -28,12 +29,6 @@ import AgentSessionRenderer from './agent-session-renderer.js';
 // ============================================================
 // Markdown renderer — lightweight, no external deps
 // ============================================================
-
-/** @param {string} text @returns {string} */
-function escapeHtml(text) {
-  const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
-  return text.replace(/[&<>"']/g, c => map[c]);
-}
 
 /** @returns {QCLI} */
 function qcli() { return /** @type {QCLI} */ (window.QCLI || {}); }

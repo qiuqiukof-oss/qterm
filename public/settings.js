@@ -5,10 +5,15 @@
 
 /** @typedef {import('./types').QCLI} QCLI */
 
-import { safeStorage } from './lib/storage.js';
+import { safeStorage, safeSession } from './lib/storage.js';
 
 /** @type {QCLI} */
 const Q = /** @type {QCLI} */ (window.QCLI = window.QCLI || {});
+
+// The AI API key is a secret managed by ChatAPI in sessionStorage (per-tab,
+// not persisted to disk). It is deliberately NOT part of SETTINGS_KEYS so it
+// never ends up in the exported settings JSON. Import/reset handle it specially.
+const AI_KEY = 'qcli-ai-key';
 
 const SETTINGS_KEYS = {
   fontSize: 'qcli-font-size',
@@ -20,7 +25,6 @@ const SETTINGS_KEYS = {
   theme: 'qcli-theme',
   lang: 'qcli-lang',
   css: 'qcli-custom-css',
-  aiKey: 'qcli-ai-key',
   aiProvider: 'qcli-ai-provider',
   aiModel: 'qcli-ai-model',
   aiBaseUrl: 'qcli-ai-base-url',
@@ -81,7 +85,13 @@ function importSettings(file) {
       // Apply localStorage settings
       let applied = 0;
       for (const [key, val] of Object.entries(data.localSettings)) {
-          safeStorage.set(key, val);
+          if (key === AI_KEY) {
+            // Never re-persist a secret to disk — route legacy exports that
+            // still carry the key into session-only storage.
+            safeSession.set(AI_KEY, val);
+          } else {
+            safeStorage.set(key, val);
+          }
           applied++;
       }
 
@@ -117,6 +127,10 @@ function resetSettings() {
   for (const key of keys) {
     safeStorage.remove(key);
   }
+  // Clear the API key from both stores (session-only now, but purge any
+  // lingering legacy localStorage copy too).
+  safeSession.remove(AI_KEY);
+  safeStorage.remove(AI_KEY);
 
   showSettingsToast('All settings reset → reloading', 'info');
   setTimeout(() => location.reload(), 1000);

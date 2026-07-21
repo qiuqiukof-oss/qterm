@@ -12,6 +12,8 @@
 // @ts-check
 'use strict';
 
+import { escapeHtml } from '../escape.js';
+
 /** @typedef {import('../types').QCLI} QCLI */
 /** @type {QCLI} */
 const Q = /** @type {QCLI} */ (window.QCLI || {});
@@ -1101,16 +1103,6 @@ function renderDetailView(detail) {
 function getPluginIcon(p) {
   if (p.icon) return p.icon;
   return '🔌';
-}
-
-function escapeHtml(str) {
-  if (!str) return '';
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
 }
 
 // ============================================================

@@ -61,6 +61,7 @@ const { createOrchestrator } = require('./ws/orchestrator');
 const { createContextStore } = require('./ws/context-store');
 const { createPTYPolicy } = require('./ws/pty-policy');
 const { createDigitalEmployee, createDigitalEmployeeTeam, ROLES } = require('./ws/digital-employee');
+const { agentPool } = require('./routes/ai-tools/agent-pool');
 const { filterSensitiveEnv } = require('./lib/env-filter');
 const { wsAllowed } = require('./lib/access-auth');
 const { dispatchWSMessage } = require('./ws/message-dispatch');
@@ -112,7 +113,13 @@ function createWSManager({ port = 3001 } = {}) {
   const workflowEngine = createOrchestrator({ createHeadlessPTY, getAgentCommand, lookupCommand, contextStore });
 
   // ── Digital Employee Team ──
-  const digitalEmployeeTeam = createDigitalEmployeeTeam({ contextStore, agentManager });
+  // Wire the shared agentPool + broadcast so dispatched tasks actually execute
+  // (roundtable real execution) and stream cleaned output to every client.
+  // `broadcast` is a hoisted function declaration below, so referencing it here
+  // (before its textual definition) is safe — we only capture the reference.
+  const digitalEmployeeTeam = createDigitalEmployeeTeam({
+    contextStore, agentManager, agentPool, broadcast,
+  });
 
   /**
    * Kill a specific tab's PTY for a client.

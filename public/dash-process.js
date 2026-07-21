@@ -49,8 +49,8 @@ export function drawProcSparklines() {
     }
 
     const memCanvas = document.getElementById('ps-mem-' + sid);
-    if (memCanvas && Q.ChartCore && Q.ChartCore.drawSparkLine) {
-      Q.ChartCore.drawSparkLine(memCanvas, ph.mem, success, '内存', 'MB');
+    if (memCanvas && (window.QCLI || {}).ChartCore?.drawSparkLine) {
+      (window.QCLI || {}).ChartCore.drawSparkLine(memCanvas, ph.mem, success, '内存', 'MB');
     }
   }
 }

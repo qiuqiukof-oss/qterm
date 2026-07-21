@@ -12,6 +12,8 @@
 // @ts-check
 'use strict';
 
+import { escapeHtml } from '../escape.js';
+
 /** @typedef {import('../types').QCLI} QCLI */
 
 const Q = window.QCLI = window.QCLI || {};
@@ -131,7 +133,7 @@ function _showDiagram(source, type, tabId) {
       </div>
     </div>
     <div class="tmf-body">
-      <div class="diagram-source" data-type="${type}">${_escapeHtml(source)}</div>
+      <div class="diagram-source" data-type="${type}">${escapeHtml(source)}</div>
     </div>
   `;
 
@@ -226,11 +228,6 @@ function cleanupAll() {
     _floatingPanel = null;
   }
   document.removeEventListener('keydown', _onEscKey);
-}
-
-function _escapeHtml(text) {
-  const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
-  return text.replace(/[&<>"']/g, c => map[c]);
 }
 
 // ── 导出 ──

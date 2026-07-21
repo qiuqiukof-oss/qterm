@@ -8,9 +8,28 @@
 /** @typedef {import('./types').QCLI} QCLI */
 
 import { safeStorage } from './lib/storage.js';
+import { escapeHtml } from './escape.js';
 
 /** @type {QCLI} */
 const Q = /** @type {QCLI} */ (window.QCLI = window.QCLI || {});
+
+/**
+ * Allow only safe image URL schemes before interpolating into `<img src>`.
+ * AI-generated / backend content can carry `javascript:` or other hostile
+ * schemes; anything not on the allowlist returns '' so the image renders empty
+ * instead of executing. Accepts http(s), data:image/*, blob:, and same-origin
+ * root-relative paths (but not protocol-relative `//host`).
+ * @param {unknown} url
+ * @returns {string}
+ */
+function safeImageUrl(url) {
+  const s = String(url == null ? '' : url).trim();
+  if (/^https?:\/\//i.test(s)) return s;
+  if (/^data:image\//i.test(s)) return s;
+  if (/^blob:/i.test(s)) return s;
+  if (s.startsWith('/') && !s.startsWith('//')) return s;
+  return '';
+}
 
 export const Media = {
   _initialized: false,
@@ -556,7 +575,7 @@ function buildAIImageItem(img, compareMode) {
     <div class="media-item ai-image-item ${isSelected ? 'ai-selected' : ''}" data-ai-id="${img.id}">
       ${checkboxHtml}
       <div class="media-thumb">
-        <img src="${img.url}" alt="${escapeHtml(img.prompt || 'AI generated')}" loading="lazy" />
+        <img src="${escapeHtml(safeImageUrl(img.url))}" alt="${escapeHtml(img.prompt || 'AI generated')}" loading="lazy" />
         <div class="media-thumb-overlay"><span>🔍 预览</span></div>
       </div>
       ${actionBtns}
@@ -664,7 +683,7 @@ async function generateImage() {
       if (resultEl) {
         resultEl.innerHTML = `
           <div class="ai-gen-success">
-            <img src="${markdownUrl}" alt="${escapeHtml(prompt)}" class="ai-gen-preview-img" />
+            <img src="${escapeHtml(safeImageUrl(markdownUrl))}" alt="${escapeHtml(prompt)}" class="ai-gen-preview-img" />
             <div class="ai-gen-meta">
               <strong>✅ 生成成功</strong>
               <span>${escapeHtml(prompt)}</span>
@@ -868,7 +887,7 @@ function buildComparePaneHTML(img, index) {
   return `
     <div class="ai-compare-pane-inner">
       <div class="ai-compare-pane-badge">${labels[index]}</div>
-      <img src="${img.url}" alt="${escapeHtml(img.prompt || '')}" class="ai-compare-pane-img" />
+      <img src="${escapeHtml(safeImageUrl(img.url))}" alt="${escapeHtml(img.prompt || '')}" class="ai-compare-pane-img" />
       <div class="ai-compare-pane-details">
         <div class="ai-compare-pane-prompt" title="${escapeHtml(img.prompt || '')}">${escapeHtml(img.prompt?.slice(0, 80) || '(无提示词)')}</div>
         <div class="ai-compare-pane-meta">
@@ -1326,8 +1345,6 @@ function detectMimeType(filename) {
   const map = { 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png', 'gif': 'image/gif', 'webp': 'image/webp', 'svg': 'image/svg+xml', 'mp4': 'video/mp4', 'webm': 'video/webm', 'ogg': 'video/ogg', 'mov': 'video/quicktime', 'pdf': 'application/pdf' };
   return map[ext] || 'application/octet-stream';
 }
-
-function escapeHtml(str) { const d = document.createElement('div'); d.textContent = str; return d.innerHTML; }
 
 // ============================================================
 // Cleanup

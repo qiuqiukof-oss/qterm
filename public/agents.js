@@ -4,6 +4,8 @@
 // ============================================================
 'use strict';
 
+import { escapeHtml } from './escape.js';
+
 /** @typedef {import('./types').QCLI} QCLI */
 
 /** @type {QCLI} */
@@ -328,12 +330,6 @@ const Q = /** @type {QCLI} */ (window.QCLI = window.QCLI || {});
   function closeAgentLog() {
     const overlay = document.getElementById('agent-log-overlay');
     if (overlay) overlay.classList.add('hidden');
-  }
-
-  function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
   }
 
   // ── Simple inline toast ──

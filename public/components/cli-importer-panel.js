@@ -3,6 +3,8 @@
 // ============================================================
 'use strict';
 
+import { escapeHtml } from '../escape.js';
+
 (function registerCLIImporter() {
   const Q = window.QCLI || {};
 
@@ -234,12 +236,6 @@
       previewEl.innerHTML = `<div style="color:#ef4444;font-size:11px;padding:8px;">❌ 无法解析文件: ${err.message}</div>`;
       previewEl.style.display = 'block';
     }
-  }
-
-  function escapeHtml(str) {
-    const d = document.createElement('div');
-    d.textContent = str;
-    return d.innerHTML;
   }
 
   // Register as right panel tab

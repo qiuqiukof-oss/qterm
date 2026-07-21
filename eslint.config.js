@@ -10,8 +10,17 @@ module.exports = [
       'node_modules/**',
       'public/bundle.js',
       'public/bundle.js.map',
+      'public/lazy-bundle.js',
+      'public/lazy-bundle.js.map',
       'public/**/*.min.js',
       'coverage/**',
+      // Vendored / generated third-party assets — NOT project source.
+      // The CDP browser profile ships bundled Chrome extensions (minified,
+      // non-standard syntax) and vendor connectors ship prebuilt bundles that
+      // reference plugin rules we do not install. Linting them is meaningless
+      // and produces thousands of false positives / parse errors.
+      'data/**',
+      'vendor/**',
     ],
   },
 
@@ -29,6 +38,9 @@ module.exports = [
       'ws/**/*.js',
       'plugins/**/*.js',
       'mcp/**/*.js',
+      'lib/**/*.js',
+      'plans/**/*.js',
+      'scripts/**/*.js',
     ],
     languageOptions: {
       sourceType: 'commonjs',
@@ -64,6 +76,24 @@ module.exports = [
 
       // Console is used extensively for logging — keep enabled
       'no-console': 'off',
+    },
+  },
+
+  // ── Backend files containing browser-context code ──
+  // These modules define code that is serialized and executed *inside a browser*
+  // via CDP (page.evaluate) or shipped as plugin UI panels. They legitimately
+  // reference `document` / `window` / `navigator`, so they need browser globals
+  // layered on top of the Node.js backend config above (flat-config merges).
+  {
+    files: [
+      'routes/browser/**/*.js',
+      'routes/ai-tools/builtin/web-fetch.js',
+      'plugins/**/ui/**/*.js',
+    ],
+    languageOptions: {
+      globals: {
+        ...globals.browser,
+      },
     },
   },
 

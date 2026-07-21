@@ -89,7 +89,8 @@
     "postinstall": "husky || echo 'husky not initialized'",
     "lint-staged": "lint-staged",
     "test": "node --test --test-timeout=30000",
-    "test:frontend": "npx web-test-runner --config test/frontend/web-test-runner.config.js",
+    "test:coverage": "node --test --experimental-test-coverage --test-timeout=30000",
+    "plans": "node plans/run-all.js",
     "format": "prettier --write \"**/*.js\" \"**/*.css\" \"**/*.json\" \"**/*.html\"",
     "format:check": "prettier --check \"**/*.js\" \"**/*.css\" \"**/*.json\" \"**/*.html\""
   },
@@ -133,6 +134,21 @@
     "ws-handler.js": [
       "eslint --fix",
       "node --check"
+    ],
+    "lib/**/*.js": [
+      "eslint --fix",
+      "node --check"
+    ],
+    "test/**/*.js": [
+      "eslint --fix",
+      "node --check"
+    ],
+    "plans/**/*.js": [
+      "eslint --fix",
+      "node --check"
+    ],
+    "public/**/*.js": [
+      "eslint --fix"
     ]
   },
   "devDependencies": {

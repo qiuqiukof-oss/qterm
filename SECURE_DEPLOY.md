@@ -10,6 +10,11 @@
 - **命令策略默认 `blocklist`**：`mkfs`/`dd`/`shutdown`/`rm -rf /`、fork bomb、写 boot 区等
   危险操作开箱即拦（见 `mcp/security/policy.js`）。可改 `QCLI_POLICY_PATH` 指向的策略文件
   切换为 `allowlist` 或 `permissive`。
+- **本地来源守卫（防浏览器 drive-by / CSRF）**：CORS 只能阻止跨站页面**读取**响应，
+  但一个「simple」跨站 POST 仍会**执行副作用**。因 Hesi 是本地服务，`lib/access-auth.js`
+  的 `localOriginGuard` 会在任何处理器之前拒绝携带**非回环 Origin** 的改状态请求
+  （与 `QCLI_CORS_ORIGINS` 白名单共用）。这可挡住「用户在浏览器打开恶意网页 →
+  该页悄悄向 `127.0.0.1:4264` 发 POST」这类真实的本地威胁。
 - **统一审计总线**（`lib/audit.js`）记录登录、PTY 命令、MCP 工具、上传、配置变更等到
   `data/audit.jsonl`，便于事后追溯。
 

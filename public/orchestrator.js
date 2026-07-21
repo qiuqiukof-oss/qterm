@@ -19,6 +19,8 @@
 // ============================================================
 'use strict';
 
+import { escapeHtml } from './escape.js';
+
 /** @typedef {import('./types').QCLI} QCLI */
 /** @type {QCLI} */
 const Q = /** @type {QCLI} */ (window.QCLI = window.QCLI || {});
@@ -43,11 +45,6 @@ const Orchestrator = {
 
 // ── DOM helpers ──
 function el(id) { return document.getElementById(id); }
-function escapeHtml(s) {
-  return String(s == null ? '' : s)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-}
 function send(msg) {
   if (Q.wsSend) Q.wsSend(msg);
 }

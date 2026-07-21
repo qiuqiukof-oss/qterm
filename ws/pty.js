@@ -157,7 +157,12 @@ function createHeadlessExec(cliEntry, prompt, opts = {}) {
     cwd: cwd || process.env.HOME || process.env.USERPROFILE || __dirname,
   };
 
-  const useStdin = !!desc.useStdin && !desc.args;
+  // A descriptor may combine `args` (flags only) with `useStdin` — the prompt is
+  // then piped to stdin (multi-line safe) while argv carries only static flags.
+  // This matters on Windows where shell:true re-tokenizes argv, mangling any
+  // prompt that contains spaces/newlines/quotes. Descriptors that embed the
+  // prompt directly in argv should NOT set useStdin.
+  const useStdin = !!desc.useStdin;
   const args = desc.args ? desc.args(prompt) : (desc.subcommand ? [desc.subcommand] : []);
 
   let child;

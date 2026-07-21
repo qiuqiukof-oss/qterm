@@ -61,10 +61,37 @@ const RES_RE = /<workbuddy-msg[^>]*kind=["']response["'][^>]*msgId=["']([^"']+)[
  * @param {object}   deps.contextStore
  */
 function createOrchestrator({ createHeadlessPTY, getAgentCommand, lookupCommand, contextStore }) {
-  /** Map<ws, runState> */
+  // A single client (ws) may now run multiple workflows concurrently, so each
+  // ws maps to a Map<wfId, runState> rather than a single run. Previously a
+  // second run() on the same ws silently overwrote the first (orphaning it and
+  // corrupting activeRuns cleanup) — this structure fixes that latent bug.
+  /** @type {Map<object, Map<number, object>>} Map<ws, Map<wfId, runState>> */
   const activeRuns = new Map();
   let idCounter = 0;
   const nextId = () => ++idCounter;
+
+  /** All runs for a ws (insertion-ordered), or undefined. */
+  const runsFor = (ws) => activeRuns.get(ws);
+  /** Most-recently-started run for a ws (used when no wfId is specified). */
+  function latestRun(ws) {
+    const runs = activeRuns.get(ws);
+    if (!runs || runs.size === 0) return null;
+    let last = null;
+    for (const rs of runs.values()) last = rs; // Map preserves insertion order
+    return last;
+  }
+  /** Resolve a run by explicit wfId, else fall back to the latest run. */
+  function resolveRun(ws, wfId) {
+    if (wfId != null) return activeRuns.get(ws)?.get(wfId) || null;
+    return latestRun(ws);
+  }
+  /** Remove a finished/cancelled run and prune the ws entry when empty. */
+  function removeRun(ws, wfId) {
+    const runs = activeRuns.get(ws);
+    if (!runs) return;
+    runs.delete(wfId);
+    if (runs.size === 0) activeRuns.delete(ws);
+  }
 
   // ──────────────────────────────────────────────
   // Helpers
@@ -619,26 +646,29 @@ function createOrchestrator({ createHeadlessPTY, getAgentCommand, lookupCommand,
       maxConcurrency: norm.maxConcurrency || 4, running: 0, cancelled: false,
       variables: norm.variables || {}, bus: { pending: new Map() }, _finalized: false, _resolve: null,
     };
-    activeRuns.set(ws, rs);
+    let runs = activeRuns.get(ws);
+    if (!runs) { runs = new Map(); activeRuns.set(ws, runs); }
+    runs.set(wfId, rs);
 
     for (const t of norm.tasks) emit(ws, { type: 'task:added', workflowId: wfId, task: serializeTask(t) });
     emit(ws, { type: 'workflow:started', workflowId: wfId, totalSteps: norm.tasks.length, name: def.name || 'Orchestration' });
 
     await new Promise((resolve) => { rs._resolve = resolve; schedule(rs); });
-    activeRuns.delete(ws);
+    removeRun(ws, wfId);
   }
 
   function cancel(ws, wfId) {
-    const rs = activeRuns.get(ws);
-    if (!rs || rs.wfId !== wfId) return;
+    const rs = activeRuns.get(ws)?.get(wfId);
+    if (!rs) return;
     rs.cancelled = true;
     finalize(rs, 'cancelled');
-    activeRuns.delete(ws);
+    removeRun(ws, wfId);
   }
 
   // Dynamic task decomposition: add a task (or tasks) to a running run.
-  function addTask(ws, taskDef) {
-    const rs = activeRuns.get(ws);
+  // Routes to `wfId` when given, otherwise the client's most-recent run.
+  function addTask(ws, taskDef, wfId) {
+    const rs = resolveRun(ws, wfId);
     if (!rs) return { error: 'no active run' };
     const arr = Array.isArray(taskDef) ? taskDef : [taskDef];
     const added = [];
@@ -665,21 +695,22 @@ function createOrchestrator({ createHeadlessPTY, getAgentCommand, lookupCommand,
   }
 
   function sendMessage(ws, msg) {
-    const rs = activeRuns.get(ws);
+    const rs = resolveRun(ws, msg && msg.wfId);
     if (!rs) return;
     receiveAgentMessage(rs, msg);
   }
 
   function cleanupWorkflows(ws) {
-    const rs = activeRuns.get(ws);
-    if (rs) {
+    const runs = activeRuns.get(ws);
+    if (!runs) return;
+    for (const rs of [...runs.values()]) {
       rs.cancelled = true;
       finalize(rs, 'cancelled');
-      activeRuns.delete(ws);
     }
+    activeRuns.delete(ws);
   }
 
-  return { run, cancel, addTask, sendMessage, cleanupWorkflows, activeRuns, STATUS };
+  return { run, cancel, addTask, sendMessage, cleanupWorkflows, activeRuns, runsFor, latestRun, STATUS };
 }
 
 module.exports = { createOrchestrator, STATUS };

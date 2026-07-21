@@ -160,7 +160,7 @@ function createRouter({ uploadLimiter }) {
       // Validate file extension
       if (!isAllowedUploadExt(file.originalname)) {
         // Clean up temp file
-        try { fs.unlinkSync(file.path); } catch { console.warn('[Upload] cleanup temp file:', e?.message); }
+        try { fs.unlinkSync(file.path); } catch (e) { console.warn('[Upload] cleanup temp file:', e?.message); }
         return res.status(400).json({
           error: `File type not allowed: ${path.extname(file.originalname)}. Only images, videos, and PDF are accepted.`,
         });

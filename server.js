@@ -115,6 +115,14 @@ app.use(cors({
   },
   credentials: false,
 }));
+// ── Local-origin guard ──
+// CORS only stops a cross-site page from *reading* our responses; a "simple"
+// cross-site POST still *executes* its side effect. Since this is a local-only
+// service, reject state-changing requests carrying a non-loopback Origin before
+// any handler runs (defense against browser drive-by / CSRF). Shares the
+// QCLI_CORS_ORIGINS allowlist with the CORS config above.
+const { localOriginGuard } = require('./lib/access-auth');
+app.use(localOriginGuard);
 app.use(express.json({ limit: '1mb' }));
 
 // Serve security.txt (RFC 9116 vulnerability disclosure) at the well-known path.
@@ -127,13 +135,34 @@ app.get('/xterm/css/xterm.css', (req, res) => {
   res.sendFile(path.join(__dirname, 'node_modules', '@xterm', 'xterm', 'css', 'xterm.css'));
 });
 
+// Serve the SPA shell with content-hashed bundle URLs (/bundle.js?v=<hash>).
+// Injecting the hash here (rather than at build time) keeps the folder-copy /
+// offline distribution model intact and picks up rebuilds without a restart.
+// index.html itself stays no-cache so the current hashes are always delivered.
+const PUBLIC_DIR = path.join(__dirname, 'public');
+const { injectAssetHashes } = require('./lib/asset-hash');
+const HASHED_BUNDLES = ['bundle.js', 'lazy-bundle.js'];
+app.get(['/', '/index.html'], (req, res, next) => {
+  fs.readFile(path.join(PUBLIC_DIR, 'index.html'), 'utf8', (err, html) => {
+    if (err) return next(); // fall through to express.static (e.g. missing file)
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.type('html').send(injectAssetHashes(html, PUBLIC_DIR, HASHED_BUNDLES));
+  });
+});
+
 // Serve static frontend
-// CSS/JS/HTML: no cache; images/fonts/wasm: 7-day immutable cache
-app.use(express.static(path.join(__dirname, 'public'), {
+// CSS/JS/HTML: no cache; hashed bundles: 1-year immutable; images/fonts/wasm: 7-day immutable
+app.use(express.static(PUBLIC_DIR, {
   maxAge: 0,
   etag: true,
   setHeaders: (res, filePath) => {
-    if (filePath.endsWith('.html') || filePath.endsWith('.js') || filePath.endsWith('.css')) {
+    const base = path.basename(filePath);
+    if (HASHED_BUNDLES.includes(base)) {
+      // Content-hashed via ?v= in index.html, so the bytes behind a given URL
+      // never change → safe to cache for a year. A rebuild changes the hash,
+      // which changes the URL, which busts the cache automatically.
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    } else if (filePath.endsWith('.html') || filePath.endsWith('.js') || filePath.endsWith('.css')) {
       // JS/CSS/HTML: no cache — always fresh from server
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     } else if (filePath.endsWith('.svg') || filePath.endsWith('.png') || filePath.endsWith('.jpg') ||

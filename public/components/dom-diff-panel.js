@@ -7,6 +7,8 @@
 // @ts-check
 'use strict';
 
+import { escapeHtml } from '../escape.js';
+
 function Q() { return window.QCLI || {}; }
 
 let _snapshotA = null;
@@ -174,11 +176,6 @@ function init(container) {
   });
 
   updateUI();
-}
-
-function escapeHtml(str) {
-  if (str == null) return '';
-  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 // ── UIRegistry Registration ──

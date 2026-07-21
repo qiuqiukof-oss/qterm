@@ -85,11 +85,13 @@ function createDigitalEmployee(opts) {
     name: name || roleCfg.name,
     icon: roleCfg.icon,
     color: roleCfg.color,
+    persona: roleCfg.persona, // system persona injected into the agent context
     agentId,
     tools: tools || [],
     status: 'idle',  // idle|working|waiting_human|error
     taskQueue: [],
     currentTask: null,
+    _draining: false, // guards the queue-drain worker (see digital-employee-worker.js)
     stats: { tasksCompleted: 0, tasksFailed: 0, humanRequests: 0 },
 
     /**
@@ -182,12 +184,30 @@ function createDigitalEmployee(opts) {
  * @param {object} deps
  * @param {object} [deps.contextStore]  — Context Store 实例
  * @param {object} [deps.agentManager]  — Agent Manager 实例
+ * @param {object} [deps.agentPool]     — 共享 AgentPoolManager（提供真实任务执行）
+ * @param {(data:object)=>void} [deps.broadcast] — WS 广播函数（推送圆桌执行事件）
+ * @param {object} [deps.runnerOpts]    — 传给 createTaskRunner 的可选项（超时/轮询间隔等）
  * @returns {object} 团队管理器
  */
-function createDigitalEmployeeTeam({ contextStore, agentManager } = {}) {
+function createDigitalEmployeeTeam({ contextStore, agentManager, agentPool, broadcast, runnerOpts } = {}) {
   const team = new Map();
 
+  // Execution engine: only wired when an agentPool is provided. Without it the
+  // team degrades to queue-only (legacy behavior) rather than crashing — useful
+  // for tests / minimal embeds. With it, dispatched tasks actually run.
+  let runner = null;
+  if (agentPool) {
+    const { createTaskRunner } = require('./digital-employee-worker');
+    runner = createTaskRunner({ agentPool, broadcast, ...(runnerOpts || {}) });
+  }
+
   return {
+    /** Whether real execution is wired (agentPool present). */
+    get canExecute() { return runner !== null; },
+
+    /** The underlying task runner (null when queue-only). Exposed for tests. */
+    get runner() { return runner; },
+
     /**
      * 注册一个数字员工到团队。
      * @param {object} employee — 由 createDigitalEmployee 创建的实例
@@ -243,7 +263,27 @@ function createDigitalEmployeeTeam({ contextStore, agentManager } = {}) {
     async dispatchTask(role, task) {
       const e = this.findByRole(role);
       if (!e) throw new Error(`没有找到角色为 "${role}" 的数字员工`);
-      return e.assignTask(task);
+      const res = await e.assignTask(task);
+      // Fire-and-forget the queue drain so dispatch returns promptly. drain() is
+      // idempotent (guarded by employee._draining), so concurrent dispatches to
+      // the same employee coalesce into one serial worker that picks up every
+      // newly-enqueued task. Errors are surfaced via broadcast events, never thrown.
+      if (runner) runner.drain(e).catch(() => { /* reported via de:task-error */ });
+      return res;
+    },
+
+    /**
+     * 分配任务并等待真实执行结果（需要 agentPool）。
+     * 若未接入执行引擎则退回排队语义。
+     * @param {string} role
+     * @param {object} task
+     * @returns {Promise<object>} runOne 的结果或排队结果
+     */
+    async dispatchAndRun(role, task) {
+      const e = this.findByRole(role);
+      if (!e) throw new Error(`没有找到角色为 "${role}" 的数字员工`);
+      if (!runner) return e.assignTask(task);
+      return runner.runOne(e, task);
     },
 
     /**
