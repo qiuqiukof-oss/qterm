@@ -64,8 +64,8 @@ function createContextStore(opts = {}) {
   /** Notify subscribers whose pattern matches the key */
   function _notify(key, entry) {
     for (const [pattern, callbacks] of _subscribers) {
-      // pattern matching: prefix match OR glob-like containment
-      const matches = key === pattern || key.startsWith(pattern) || key.includes(pattern);
+      // pattern matching: exact match OR prefix match (keyPrefix subscribers)
+      const matches = key === pattern || key.startsWith(pattern);
       if (!matches) continue;
       for (const cb of callbacks) {
         try { cb(entry, store); } catch (e) {

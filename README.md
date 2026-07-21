@@ -347,7 +347,7 @@ Linux  ：在终端运行 ./tray.sh
 
 ```bash
 node plans/verify-terminal-clean.js          # 终端转义清洗（9 项）
-node plans/test-discuss.js                  # 讨论协调器（7 项）
+node plans/test-discuss.js                  # 讨论协调器模块契约回归（7 项：加载/导出/形状/异步/arity/缓存）
 node plans/test-stability-regression.js     # 稳定性回归（37 项：工具中断/限流/流完结/环检测）
 ```
 

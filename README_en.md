@@ -346,7 +346,7 @@ The regression suite lives in `plans/` (plain Node scripts, no framework needed)
 
 ```bash
 node plans/verify-terminal-clean.js          # terminal escape cleaning (9 cases)
-node plans/test-discuss.js                  # discussion coordinator (7 cases)
+node plans/test-discuss.js                  # discussion coordinator module-contract regression (7 checks: load/export/shape/async/arity/cache)
 node plans/test-stability-regression.js     # stability regression (37 cases: tool interruption / rate limiting / stream completion / cycle detection)
 ```
 

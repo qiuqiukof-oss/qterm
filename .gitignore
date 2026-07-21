@@ -30,7 +30,6 @@ server-test.log
 .mcp.json
 
 # ===== Scratch / dev artifacts (not part of the shipped product) =====
-plans/
 cmd.exe.lnk
 
 # ===== OS junk =====
