@@ -65,7 +65,7 @@
     "node-pty": "^1.1.0",
     "strip-ansi": "^7.2.0",
     "uuid": "^14.0.1",
-    "ws": "^8.18.0"
+    "ws": "^8.21.1"
   },
   "optionalDependencies": {
     "playwright": "^1.52.0"
