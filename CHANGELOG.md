@@ -6,6 +6,21 @@ use `vMAJOR.MINOR.PATCH-<tag>`.
 
 ---
 
+## [v0.2.2] — 2026-07-24
+
+Maintenance drop: dependency hygiene + persisted LLM key. No breaking changes; chat API and CLI behavior preserved.
+
+### Fixed
+- **Dependency security upgrade** — `npm audit fix` (non-force) upgraded 42 compatible packages, eliminating `fast-uri` (high, authority-host confusion) and `body-parser` (moderate, DoS via invalid `limit`). The remaining `@hono/node-server` moderate is an unused transitive dep of `@modelcontextprotocol/sdk` (Hesi uses Express, loopback-only) — a supply-chain false positive with zero real impact.
+
+### Changed
+- **Persisted LLM API key** — `chat-api.js` now stores the key in `localStorage` instead of `sessionStorage`, so it survives browser restarts. Local single-machine scope; the key stays in the browser's Web Storage and never enters Hesi `data/` or git.
+
+### Docs
+- **README (zh/en)** — added an "On `npm audit` Warnings" note under Secure Deployment so downloaders know the `@hono` moderate is a benign false positive.
+
+---
+
 ## [v0.2.1] — 2026-07-24
 
 Maintenance drop focused on **discussion-mode stability, the "deep thinking" panel UX, and SSE / context robustness**. No breaking changes; chat API and CLI behavior are preserved.
