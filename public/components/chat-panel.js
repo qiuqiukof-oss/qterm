@@ -154,6 +154,7 @@ class ChatPanel extends HTMLElement {
     this._setupDiscussControls();
     this._restoreState();
     this._patchQCLI();
+    this._initMemory();
 
     // Subscribe to stores — sync component state to store FIRST so the
     // immediate callback on subscribe() doesn't falsely toggle() back
@@ -683,6 +684,12 @@ class ChatPanel extends HTMLElement {
   }
 
   _loadHistory() {
+    // Memory subsystem takes over session persistence server-side. When enabled,
+    // the current session's messages are loaded via Q.MemorySession.init()
+    // (which fires onSessionChange). Legacy localStorage is kept only as the
+    // fallback for when the subsystem is disabled (MEMORY_ENABLED=false).
+    const Q = qcli();
+    if (Q.MemorySession && Q.MemorySession.enabled) return;
     const msgs = safeStorage.getJSON('qcli-chat-history');
     if (Array.isArray(msgs) && msgs.length > 0) {
       this.messages = msgs;
@@ -693,8 +700,84 @@ class ChatPanel extends HTMLElement {
   }
 
   _saveHistory() {
+    // When the memory subsystem owns persistence, do nothing here — the server
+    // stores messages. Otherwise keep the legacy localStorage backup.
+    const Q = qcli();
+    if (Q.MemorySession && Q.MemorySession.enabled) return;
     const toSave = this.messages.filter(m => m.role === 'user' || m.role === 'assistant');
     safeStorage.setJSON('qcli-chat-history', toSave.slice(-50));
+  }
+
+  // Stable per-message id so the server can idempotently merge re-sent history.
+  _genId() {
+    if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    return 'm_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
+  }
+
+  // Apply a server session's messages to the panel (called on load / switch).
+  _applySession(id, msgs) {
+    const arr = Array.isArray(msgs) ? msgs : [];
+    this.messages = arr.map(m => ({
+      id: (m && m.id) || this._genId(),
+      role: (m && m.role) || 'assistant',
+      content: (m && m.content != null) ? String(m.content) : '',
+    }));
+    // Always re-render, even for an empty session — otherwise the stale DOM
+    // from the previously-viewed session lingers in the panel.
+    this.renderAll();
+    if (this.messages.length === 0 && this.msgsEl && !this.msgsEl.querySelector('.welcome-msg')) {
+      const Q = qcli();
+      this.msgsEl.innerHTML = `
+        <div class="chat-message welcome-msg">
+          <div class="msg-avatar ai-avatar">🤖</div>
+          <div class="msg-content">
+            <div class="msg-sender">${Q.__?.('chat.sender.ai') || "AI Assistant"}</div>
+            <div class="msg-bubble ai-bubble">${Q.__?.('chat.welcome') || "Hello! I'm your AI assistant. How can I help you?"}</div>
+          </div>
+        </div>`;
+    }
+    this.scrollToBottom();
+  }
+
+  // Hook the memory subsystem: subscribe to session switches and restore the
+  // current session's messages.
+  //
+  // IMPORTANT: <chat-panel> is in the static HTML, so the browser upgrades it
+  // (fires connectedCallback) synchronously during customElements.define —
+  // which runs while chat-panel.js is being evaluated. At that exact moment
+  // memory/session-store.js may NOT have run yet, so window.QCLI.MemorySession
+  // is still undefined and a naive `if (!M) return;` would silently leave the
+  // panel permanently unsubscribed (titles persist via the list, but clicking
+  // a session never switches content and refresh never restores it).
+  //
+  // So we poll briefly for MemorySession instead of bailing out.
+  _initMemory() {
+    if (this._memoryInitStarted) return;
+    this._memoryInitStarted = true;
+
+    const wire = () => {
+      const M = qcli().MemorySession;
+      if (!M) return false;
+      if (this._memoryWired) return true;
+      this._memoryWired = true;
+      M.onSessionChange((id, msgs) => this._applySession(id, msgs));
+      M.init().catch((e) => console.warn('[ChatPanel] MemorySession init failed:', e && e.message));
+      // Belt-and-suspenders: if the store already finished activating (e.g. the
+      // session list initialized it first), force a restore now so the current
+      // conversation shows even if we missed the initial sessionChange event.
+      if (M.ready && M.enabled && M.currentId) {
+        M.loadMessages(M.currentId)
+          .then((msgs) => this._applySession(M.currentId, msgs))
+          .catch(() => {});
+      }
+      return true;
+    };
+
+    if (!wire()) {
+      const t = setInterval(() => { if (wire()) clearInterval(t); }, 30);
+      // Give up after 5s so we never leak a timer if something is badly broken.
+      setTimeout(() => clearInterval(t), 5000);
+    }
   }
 
   // ── Textarea auto-resize ──
@@ -753,7 +836,7 @@ class ChatPanel extends HTMLElement {
     }
 
     // Add user message
-    const userMsg = { role: 'user', content: text };
+    const userMsg = { id: this._genId(), role: 'user', content: text };
     this.messages.push(userMsg);
     this.appendToDOM(userMsg);
     this._saveHistory();
@@ -772,15 +855,28 @@ class ChatPanel extends HTMLElement {
     const requestController = this._abortController;
 
     // Real AI API or mock fallback
-    const api = Q.ChatAPI;
-    if (api) {
-      api.isConfigured().then(configured => {
-        if (!configured) {
-          this._mockResponse();
-          return;
-        }
+        const api = Q.ChatAPI;
+        if (api) {
+          api.isConfigured().then(async (configured) => {
+            if (!configured) {
+              this._mockResponse();
+              return;
+            }
 
-        const msgs = this.messages.slice(-50).map(m => ({ role: m.role, content: m.content }));
+            // Resolve (or create) the server-backed session so messages persist
+            // across refresh/restart, not just in localStorage.
+            let sessionId = null;
+            try {
+              const M = Q.MemorySession;
+              if (M && M.enabled) {
+                const firstUser = this.messages.find(m => m.role === 'user');
+                sessionId = await M.ensureCurrent({ title: firstUser ? firstUser.content.slice(0, 40) : '新会话' });
+              }
+            } catch (e) {
+              console.warn('[ChatPanel] ensure session failed:', e && e.message);
+            }
+
+            const msgs = this.messages.slice(-50).map(m => ({ id: m.id, role: m.role, content: m.content }));
         let fullResponse = '';
 
         // ── Read terminal buffer for AI context (incremental diff) ──
@@ -847,6 +943,7 @@ class ChatPanel extends HTMLElement {
 
         api.sendMessage({
           messages: msgs,
+          sessionId: sessionId || undefined,
           terminalContext: terminalContext || undefined,
           terminalContextChanged: contextChanged,
           signal: requestController?.signal,
@@ -988,12 +1085,22 @@ class ChatPanel extends HTMLElement {
               }
               this._lastUsage = null;
             }
-            const aiMsg = { role: 'assistant', content: displayContent };
+            const aiMsg = { id: this._genId(), role: 'assistant', content: displayContent };
             this.messages.push(aiMsg);
             this.appendToDOM(aiMsg);
             this._saveHistory();
             this.scrollToBottom();
             this._endSending();
+
+            // Session list (title/count) reflects the new message.
+            if (Q.MemorySession && Q.MemorySession.enabled) Q.MemorySession.refreshList().catch(() => {});
+
+            // Persist the FULL turn (incl. the AI reply) so a refresh / restart
+            // restores the whole conversation, not just the user side. The chat
+            // route only stores user messages before streaming begins.
+            if (Q.MemorySession && Q.MemorySession.enabled && sessionId) {
+              Q.MemorySession.append(sessionId, this.messages.slice(-50)).catch(() => {});
+            }
 
             // ── 语音输出：AI 回复后自动朗读 ──
             if (window.QCLI?.VoiceOutput?.speakAIResponse) {
@@ -1111,6 +1218,12 @@ class ChatPanel extends HTMLElement {
       `;
     }
     this._saveHistory();
+
+    // Memory mode: a "clear" starts a NEW session but keeps the old one in
+    // the list (nothing is lost). The old session remains restorable.
+    if (Q.MemorySession && Q.MemorySession.enabled) {
+      Q.MemorySession.create().catch(() => {});
+    }
   }
 
   // ── Public: Export chat ──

@@ -32,6 +32,11 @@ import './pin-report.js';    // PinReport → pin management UI
 import './palette.js';       // Palette → command palette
 import './chat-ui.js';       // ChatUI  → chat panel rendering
 
+// ── Memory subsystem (M3): server-backed chat sessions + 🧠 drawer ──
+import './memory/session-store.js';  // MemorySession → Q.MemorySession singleton
+import './memory/session-list.js';  // Session list → left column in chat drawer
+import './memory/memory-panel.js';  // Memory drawer → 🧠 profile/facts UI
+
 // ── Web Components (Phase 2 extraction) ──
 import './components/theme-switcher.js';    // Theme switching
 import './components/theme-customizer.js';  // Theme customization

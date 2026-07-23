@@ -6,6 +6,38 @@ use `vMAJOR.MINOR.PATCH-<tag>`.
 
 ---
 
+## [v0.2.0] — 2026-07-23
+
+Two headline features land on top of v0.1.0-optimized: the **cross-session long-term
+memory subsystem** and the **Agnes AI plugin**.
+
+### Added
+- **Cross-session long-term memory subsystem** (`lib/memory/*`, `routes/memory/*`, `public/memory/*`)
+  - Server-side per-session persistence in `data/memory/` — survives refresh / restart, no longer depends on browser `localStorage`
+  - Auto summary compaction (`<session_summary>`) replacing naive truncation; degrades to raw history when the LLM is unavailable
+  - BM25 recall injecting a `<memory>` block into the AI context (zero-dependency, local, offline)
+  - Layer-A auto profile + facts (`profile.md` / `facts.json`), viewable and forgettable in the 🧠 memory drawer
+  - Frontend: left-panel session list (new / resume / search / rename / delete), session recovery on refresh, soft-delete **trash / recycle bin**
+  - Legacy `localStorage['qcli-chat-history']` auto-migrated into the first session; `scripts/memory-migrate.js` for offline import
+  - Master kill-switch `HESI_MEMORY_ENABLED=0` — whole subsystem off, chat falls back to `localStorage`, zero behavior change
+  - 25-case memory test suite (`test/memory-*.test.js`)
+- **Agnes AI plugin** (`plugins/agnes-ai/`) — an in-panel workbench (chat / image / video / storyboard) wired through a Hesi backend proxy
+  - API key stored **server-side** (`data/plugin-data/agnes-ai/config.json`), never exposed to the browser
+  - CORS solved by the Node proxy; streaming (SSE) piped through transparently
+  - **Zero new dependencies** — reuses Hesi's existing Node + express; no Python, no extra npm packages
+  - Skills square shipped as an external link (skills.sh) in v0.2.0
+
+### Changed
+- `npm run check:server` now also syntax-checks `lib/memory/*` and `routes/memory/*`
+- `package.json` `files` already includes `plugins/` — the plugin ships with the package
+
+### Verification
+- `npm test`: 92 pass / 0 fail (incl. 25 memory cases)
+- `npm run check:server`: 0 errors
+- Agnes plugin verified live: `/api/plugins` lists `agnes-ai`; proxy returns 400 until a key is configured; config + static assets served correctly
+
+---
+
 ## [v0.1.0-optimized] — 2026-07-21
 
 Optimization plan (Phase 0–4) landing: engineering health, local security, and

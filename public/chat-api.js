@@ -108,7 +108,7 @@ export const ChatAPI = {
      * @param {boolean} [options.terminalContextChanged] - Whether terminal content has changed since last message
      * @param {AbortSignal} [options.signal] - Optional abort signal
      */
-    async sendMessage({ messages, onToken, onDone, onError, onStatus, onToolCall, onToolLive, onUsage, terminalContext, terminalContextChanged, signal, discuss, partner, partners, maxTurns, onDiscuss }) {
+    async sendMessage({ messages, onToken, onDone, onError, onStatus, onToolCall, onToolLive, onUsage, terminalContext, terminalContextChanged, signal, discuss, partner, partners, maxTurns, onDiscuss, sessionId }) {
       const apiKey = this.getApiKey();
       const provider = this.getProvider();
       const model = this.getModel();
@@ -117,6 +117,7 @@ export const ChatAPI = {
       try {
         const body = {
           messages,
+          sessionId: sessionId || undefined,
           apiKey: apiKey || undefined,
           provider: provider || undefined,
           model: model || undefined,

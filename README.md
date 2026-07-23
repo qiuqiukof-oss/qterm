@@ -128,6 +128,21 @@
 - **浏览器控制工具** — 导航、截图、点击、输入、执行 JS、DOM 快照、表单填表
 - **自我进化** — 可读取/修改自身源码、重建前端、截屏检查 UI
 
+### 🧠 跨会话记忆 · Cross-Session Memory
+
+> 让 AI 记得你：对话不再随刷新/重启丢失，且能**跨会话召回**过去聊过的事实。
+
+- **服务端持久化** — 每次对话以「会话」为单位存于 `data/memory/`（不依赖浏览器 localStorage，刷新/重启后仍可恢复）。
+- **左栏会话列表** — 聊天面板左侧新增会话栏：新建 / 续聊 / 搜索 / 双击改名 / 删除；按「今天 / 昨天 / 过去 7 天 / 更早」分组。
+- **🧠 记忆抽屉** — 顶部 🧠 按钮打开，展示**自动生成的用户画像**与**已记住的事实**，每条事实可「遗忘」。
+- **自动摘要压缩** — 长会话超过阈值时自动压缩为 `<session_summary>`（保留决策/事实/偏好），腾出上下文；LLM 不可用时降级为保留原文。
+- **BM25 召回** — 每次提问自动检索相关历史会话与事实，作为 `<memory>` 块注入 AI 上下文（零依赖、纯本地、可离线）。
+- **用户画像 / 事实（Layer A）** — 淡出稳定事实（偏好、项目、身份），去重累计置信度，蒸馏成 `profile.md`；可查看、可遗忘。
+- **可降级开关** — 环境变量 `HESI_MEMORY_ENABLED=0` 时整个子系统关闭，聊天退回原 localStorage 行为，**零行为变化**。
+- **旧历史迁移** — 首次升级时自动把浏览器旧 `localStorage['qcli-chat-history']` 导入为首条会话；也可用 `node scripts/memory-migrate.js --file legacy.json` 离线导入。
+
+> 隐私：所有记忆均在 `data/memory/` 本地，不外接任何云；`facts.json` / `profile.md` 用户可手动编辑或删除。
+
 ### 🤝 AI 助手 × CLI Agent 协作讨论（圆桌）· Collaborative Round-Table
 
 > 本功能是 Hesi 的核心协作场景：让「AI 助手」与一个或多个「CLI Agent（如 opencode）」就同一问题展开**多轮讨论**，互相质疑、补充、细化方案。
@@ -461,7 +476,7 @@ MIT License — see [LICENSE](./LICENSE) for details.
 > 以下为占位 badge，请替换为真实 CI / 版本 / 下载量链接。
 
 [![CI](https://img.shields.io/badge/CI-passing-brightgreen?style=flat)](https://github.com/qiuqiukof-oss/Hesi/actions)
-[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/qiuqiukof-oss/Hesi/releases)
+[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](https://github.com/qiuqiukof-oss/Hesi/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](https://github.com/qiuqiukof-oss/Hesi)
 [![Stars](https://img.shields.io/badge/stars-%E2%98%85%20your__stars__here-yellow?style=flat)](https://github.com/qiuqiukof-oss/Hesi/stargazers)

@@ -21,6 +21,10 @@ const { pruneToolContext } = require('./token-budget');
 const { streamOpenAIWithTools } = require('./stream-openai');
 const { streamAnthropicWithTools, parseAnthropicStream, buildAnthropicConversation } = require('./stream-anthropic');
 const { runDiscussion } = require('./discuss');
+// Long-term memory subsystem (M4): archive + recall + compaction. Importing the
+// facade only — internal modules stay encapsulated.
+const MemoryStore = require('../../lib/memory');
+const memoryConfig = require('../../lib/memory/config');
 
 // ============================================================
 // Non-streaming chat with tool support (for MCP ai_chat)
@@ -32,7 +36,7 @@ const NON_STREAMING_CHAIN_TIMEOUT = 180_000; // 3 min total tool chain
 
 // 生成每请求隔离标识（限流桶归属，P2-3）
 function _newRequestId() {
-  return 'chat-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+  return `chat-${  Date.now().toString(36)  }-${  Math.random().toString(36).slice(2, 8)}`;
 }
 
 /**
@@ -261,7 +265,7 @@ function createRouter(opts = {}) {
   // Response: SSE stream of tokens
   // ──────────────────────────────────────────────
   router.post('/chat', async (req, res) => {
-    const { messages, model, apiKey: clientKey, provider: clientProvider, baseUrl: clientBaseUrl, disableTools, terminalContext, terminalContextChanged, discuss, partner, partners, maxTurns } = req.body;
+    const { messages, model, apiKey: clientKey, provider: clientProvider, baseUrl: clientBaseUrl, disableTools, terminalContext, terminalContextChanged, discuss, partner, partners, maxTurns, sessionId } = req.body;
 
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'messages array is required' });
@@ -309,6 +313,27 @@ function createRouter(opts = {}) {
       ];
     }
 
+    // ── Long-term memory injection (M4) ──
+    // Server-side: archive this turn, then recall relevant facts/summaries and
+    // inject them as system blocks AHEAD of SELF_AWARE. The frontend thinking /
+    // tool-call UI is completely untouched. Gated by MEMORY_ENABLED + a provided
+    // sessionId; without either, chat degrades to the exact legacy behavior.
+    const memoryBlocks = [];
+    if (MemoryStore.enabled && sessionId) {
+      try {
+        const lastUserText = (messages[messages.length - 1]?.content || '').toString();
+        await MemoryStore.ensure(sessionId, { model, provider: clientProvider });
+        await MemoryStore.append(sessionId, messages, { model, provider: clientProvider });
+        const summaryBlock = MemoryStore.getSummaryBlock(sessionId);
+        if (summaryBlock) memoryBlocks.push(summaryBlock);
+        const memoryBlock = MemoryStore.recall(lastUserText, { topK: memoryConfig.TOPK_RECALL });
+        if (memoryBlock) memoryBlocks.push(memoryBlock);
+      } catch (memErr) {
+        // Memory is best-effort: a failure must never break the chat.
+        console.warn('[memory] injection skipped (non-fatal):', memErr && memErr.message);
+      }
+    }
+
     // Self-Awareness System Prompt
     const SELF_AWARE_PROMPT = `You are the AI assistant built into Hesi v${require('../../package.json').version}.
 
@@ -348,6 +373,7 @@ You can also manage user scripts that auto-run on matching web pages:
 - Build: \`npm run build\` (uses esbuild)`;
 
     contextMessages = [
+      ...memoryBlocks,
       { role: 'system', content: SELF_AWARE_PROMPT },
       ...contextMessages,
     ];
@@ -422,6 +448,15 @@ You can also manage user scripts that auto-run on matching web pages:
       } else {
         res.status(500).json({ error: err.message });
       }
+    }
+
+    // ── Memory post-processing (M4/M5): fire-and-forget, never blocks SSE ──
+    // Compaction / fact extraction may call the LLM; run async after the
+    // response streams so the user never waits on it.
+    if (MemoryStore.enabled && sessionId) {
+      MemoryStore.commit(sessionId).catch(() => {});
+      MemoryStore.compactIfNeeded(sessionId, { apiKey, provider: clientProvider, model }).catch(() => {});
+      MemoryStore.extractFacts(sessionId, { apiKey, provider: clientProvider, model }).catch(() => {});
     }
   });
 

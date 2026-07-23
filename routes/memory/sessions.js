@@ -1,0 +1,86 @@
+// @ts-check
+// /api/memory/sessions — list / create / get / rename / delete sessions.
+'use strict';
+
+const express = require('express');
+const MemoryStore = require('../../lib/memory');
+const schema = require('../../lib/memory/schema');
+
+const router = express.Router();
+
+router.get('/', (req, res) => {
+  const q = typeof req.query.q === 'string' ? req.query.q : '';
+  const limit = Number.parseInt(req.query.limit, 10) || 0;
+  res.json({ sessions: MemoryStore.list({ q, limit }) });
+});
+
+router.post('/', (req, res) => {
+  const { title, model, provider } = req.body || {};
+  const id = schema.createSessionId();
+  MemoryStore.ensure(id, {
+    title: typeof title === 'string' && title.trim() ? title.trim() : '新会话',
+    model: model || '',
+    provider: provider || '',
+  });
+  res.status(201).json({ id });
+});
+
+// ── Recycle bin (soft-deleted sessions) ──
+// These must be declared before '/:id' so '/trash' isn't captured by the
+// param route.
+router.get('/trash', (req, res) => {
+  res.json({ sessions: MemoryStore.listTrash() });
+});
+
+router.post('/trash/:id/restore', async (req, res) => {
+  try {
+    const ok = await MemoryStore.restore(req.params.id);
+    if (!ok) return res.status(404).json({ error: 'trashed session not found' });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.delete('/trash/:id', (req, res) => {
+  MemoryStore.purge(req.params.id);
+  res.json({ ok: true });
+});
+
+router.get('/:id', (req, res) => {
+  const s = MemoryStore.get(req.params.id);
+  if (!s) return res.status(404).json({ error: 'session not found' });
+  res.json(s);
+});
+
+// Append messages to an existing session (used by the chat panel after a turn
+// finishes, so the AI reply is persisted). Idempotent merge by message id.
+router.put('/:id/messages', (req, res) => {
+  const { messages } = req.body || {};
+  if (!Array.isArray(messages) || !messages.length) {
+    return res.status(400).json({ error: '"messages" (non-empty array) is required' });
+  }
+  try {
+    MemoryStore.append(req.params.id, messages);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.patch('/:id', (req, res) => {
+  const { title } = req.body || {};
+  if (typeof title !== 'string' || !title.trim()) {
+    return res.status(400).json({ error: '"title" (string) is required' });
+  }
+  const ok = MemoryStore.rename(req.params.id, title.trim());
+  if (!ok) return res.status(404).json({ error: 'session not found' });
+  res.json({ ok: true });
+});
+
+router.delete('/:id', (req, res) => {
+  MemoryStore.remove(req.params.id);
+  res.json({ ok: true });
+});
+
+module.exports = router;

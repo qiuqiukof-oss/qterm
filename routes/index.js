@@ -19,6 +19,7 @@ const { createRouter: createProjectRouter } = require('./project');
 const { createRouter: createStockRouter } = require('./stocks');
 const { createRouter: createToolsRouter } = require('./tools');
 const { createRouter: createQuantRouter, setupPageRoutes: setupQuantPageRoutes } = require('./quant');
+const { createMemoryRouter } = require('./memory');
 const { createRouter: createFinanceRouter, setupPageRoutes: setupFinancePageRoutes } = require('./finance');
 const { createRouter: createBrowserRouter } = require('./browser');
 const { createRouter: createBrowserScriptsRouter } = require('./browser-scripts');
@@ -114,6 +115,7 @@ function setupRoutes(app, opts = {}) {
   app.use('/api', createStockRouter());
   app.use('/api', createToolsRouter());
   app.use('/api', createQuantRouter());
+  app.use('/api/memory', createMemoryRouter());
   app.use('/api', createFinanceRouter());
   app.use('/api', requireToken, createBrowserRouter());
   app.use('/api', createBrowserScriptsRouter());
@@ -288,9 +290,9 @@ function setupRoutes(app, opts = {}) {
 
     if (selectedFeatures.includes('cli') || selectedFeatures.includes('all')) {
       manifest.clis = [{
-        id: name + '-tool',
-        name: name + '-tool',
-        path: name + '-tool',
+        id: `${name  }-tool`,
+        name: `${name  }-tool`,
+        path: `${name  }-tool`,
         category: 'tool',
         type: 'batch',
         args: [],
@@ -300,9 +302,9 @@ function setupRoutes(app, opts = {}) {
 
     if (selectedFeatures.includes('workflow') || selectedFeatures.includes('all')) {
       manifest.workflows = [{
-        id: name + '-workflow',
-        name: name + ' Workflow',
-        description: 'A workflow for ' + name,
+        id: `${name  }-workflow`,
+        name: `${name  } Workflow`,
+        description: `A workflow for ${  name}`,
         icon: '🔌',
         steps: [
           { id: 'step1', label: 'Step 1', agentId: 'opencode', task: 'The first step' },
@@ -312,8 +314,8 @@ function setupRoutes(app, opts = {}) {
 
     if (selectedFeatures.includes('aiTool') || selectedFeatures.includes('all')) {
       manifest.aiTools = [{
-        name: name + '_action',
-        description: 'Custom action for ' + name,
+        name: `${name  }_action`,
+        description: `Custom action for ${  name}`,
         parameters: {
           type: 'object',
           properties: {
@@ -337,7 +339,7 @@ function setupRoutes(app, opts = {}) {
     if (selectedFeatures.includes('route') || selectedFeatures.includes('all')) {
       manifest.routes = [{
         method: 'GET',
-        path: '/api/plugins/' + name + '/data',
+        path: `/api/plugins/${  name  }/data`,
         handler: 'handlers/route.js',
       }];
       // 创建 route handler 模板
@@ -374,7 +376,7 @@ function setupRoutes(app, opts = {}) {
 
     if (selectedFeatures.includes('mcp') || selectedFeatures.includes('all')) {
       manifest.mcpServers = [{
-        name: name + '-mcp',
+        name: `${name  }-mcp`,
         command: 'node',
         args: ['mcp-server.js'],
         env: {},
