@@ -18,6 +18,7 @@ AI 多媒体生成能力 + 聊天框链接可点击。
 - **视频生成不可用（真 bug）** — `routes/ai-tools/builtin/index.js` 此前漏注册 `videoGen`，`generate_video` 从未进入工具表，主聊天 AI 只能生图不能生视频；现已补注册。
 - **视频生成进度回调硬报错** — `video-gen.js` 的 `progressFn` 实为字符串（registry 第三参透传的是 requestId），每次调用必抛 TypeError 被 catch → 返回"生成失败"；统一改为 `emitProgress` 走 `broadcastFn`。
 - **图片/视频返回 token 精简** — `image-gen.js` 最终返回从 verbose 表格（~250 token）改为简洁一行（~60 token），降低回灌 LLM 上下文占用。
+- **首次对话必现 "messages array is required"** — 首条消息 push 进 `this.messages` 后，发送用的 `msgs` 却在 `isConfigured()` 异步回调里才读取；首次运行 `MemorySession.init()` 拉回的历史会整体覆盖 `this.messages`，竞态窗口内刚 push 的消息被抹空 → 发出空 `messages` → 后端 400。改为 push 后立即同步拍快照 `requestMsgs`，发送用快照，消除竞态。
 
 ---
 

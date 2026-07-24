@@ -869,6 +869,9 @@ class ChatPanel extends HTMLElement {
     this.messages.push(userMsg);
     this.appendToDOM(userMsg);
     this._saveHistory();
+    // 同步快照：防止 MemorySession 会话恢复（_applySession）在后续异步回调中
+    // 整体覆盖 this.messages，导致向 /api/chat 发出空 messages 数组（首次对话必现报错）。
+    const requestMsgs = this.messages.slice(-50).map(m => ({ id: m.id, role: m.role, content: m.content }));
     this.scrollToBottom();
 
     // Show thinking indicator
@@ -905,7 +908,7 @@ class ChatPanel extends HTMLElement {
               console.warn('[ChatPanel] ensure session failed:', e && e.message);
             }
 
-            const msgs = this.messages.slice(-50).map(m => ({ id: m.id, role: m.role, content: m.content }));
+            const msgs = requestMsgs;
         let fullResponse = '';
 
         // ── Read terminal buffer for AI context (incremental diff) ──
